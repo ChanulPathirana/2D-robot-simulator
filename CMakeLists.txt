@@ -15,7 +15,8 @@ add_executable(robot_simulator
     src/Robot.cpp
     src/World.cpp
     src/Sensor.cpp
-)
+    src/OccupancyGrid.cpp
+) 
 
 # Header directory
 target_include_directories(robot_simulator
