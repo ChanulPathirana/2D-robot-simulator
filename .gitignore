@@ -1,0 +1,40 @@
+
+# CMake build directories
+/build/
+/cmake-build-*/
+/out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+
+# Compiled binaries and libraries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.exe
+
+# Debugging
+*.core
+core
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Python cache (for future AI integration)
+__pycache__/
+*.pyc
+.venv/
