@@ -1,5 +1,6 @@
 
 #include "Robot.hpp"
+#include "World.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -64,6 +65,28 @@ void drawRobot(SDL_Renderer* renderer, const Robot& robot) {
         center.x, center.y, heading.x, heading.y);
 }
 
+void drawWorld(SDL_Renderer* renderer, const World& world) {
+    SDL_SetRenderDrawColor(renderer, 200, 80, 80, 255);
+
+    for (const auto& obstacle : world.obstacles) {
+
+        Point topLeft = toScreen(
+            obstacle.x,
+            obstacle.y + obstacle.height
+        );
+
+        SDL_FRect rect = {
+            topLeft.x,
+            topLeft.y,
+            static_cast<float>(obstacle.width * SCALE),
+            static_cast<float>(obstacle.height * SCALE)
+        };
+
+        SDL_RenderFillRect(renderer, &rect);
+    }
+}
+
+
 int main(int argc, char* argv[]) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         cerr << "SDL initialization failed: "
@@ -92,6 +115,7 @@ int main(int argc, char* argv[]) {
     }
 
     Robot robot;
+    World world;
     bool running = true;
 
     Uint64 previous = SDL_GetTicksNS();
@@ -151,14 +175,40 @@ int main(int argc, char* argv[]) {
         accumulator += elapsed;
 
         // Update robot physics at fixed intervals
+        // while (accumulator >= DT) {
+        //     robot.update(DT);
+        //     accumulator -= DT;
+        // }
+
         while (accumulator >= DT) {
+
+            // 1. Save robot's previous position
+            double oldX = robot.x;
+            double oldY = robot.y;
+            double oldTheta = robot.theta;
+
+            // 2. Update robot movement
             robot.update(DT);
+
+            // 3. Check collision
+            constexpr double ROBOT_RADIUS = 0.4;
+
+            if (world.collides(robot.x, robot.y, ROBOT_RADIUS)) {
+
+                // 4. Restore previous pose if collision occurs
+                robot.x = oldX;
+                robot.y = oldY;
+                robot.theta = oldTheta;
+            }
+
             accumulator -= DT;
         }
+
 
         // Clear background
         SDL_SetRenderDrawColor(renderer, 20, 22, 32, 255);
         SDL_RenderClear(renderer);
+        drawWorld(renderer, world);
 
         // Render robot
         drawRobot(renderer, robot);
