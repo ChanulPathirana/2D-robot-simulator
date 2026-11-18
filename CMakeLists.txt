@@ -14,6 +14,7 @@ add_executable(robot_simulator
     src/main.cpp
     src/Robot.cpp
     src/World.cpp
+    src/Sensor.cpp
 )
 
 # Header directory
