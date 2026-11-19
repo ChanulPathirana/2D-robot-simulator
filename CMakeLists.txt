@@ -19,7 +19,7 @@ add_executable(robot_simulator
     src/AStar.cpp
     src/Navigator.cpp
     src/Camera.cpp
-    
+    src/Lidar.cpp
     
 ) 
 
