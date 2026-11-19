@@ -1,227 +1,63 @@
 # 2D Robot Simulator
 
-A **C++20 robotics simulator** built with **SDL3** and **CMake** to explore differential-drive motion, obstacle detection, collision avoidance, occupancy grids, and path planning.
-
-The project starts with a manually controlled robot in a 2D environment and is being extended toward **autonomous, goal-directed navigation using A\***.
+A C++20 and SDL3 simulator for a differential-drive robot navigating a fixed 40 × 30 metre maze. The world uses mathematical coordinates: positive X points right, positive Y points up, and all distances are in metres.
 
 ## Features
 
-### Implemented
+- A handcrafted, connected maze with 38 permanent wall segments and blocks, long corridors, alternate routes, open turning areas, and dead ends.
+- Four deterministic moving rectangles that travel along fixed routes, pause, and reverse. They stop or reverse before crossing a wall, another moving object, or the robot.
+- A 0.25 m occupancy grid. Permanent blocked cells are built once; moving obstacles are queried as a temporary layer during planning.
+- Eight-direction A* with diagonal corner-cutting prevention and a waypoint-following controller.
+- A robot-following camera with zoom, manual pan, and camera-aware mouse targeting.
+- Three visible distance rays, footprint-aware emergency stopping, and collision rollback.
 
-- **Differential-drive robot:** Simulates translation and rotation using independent left and right wheel velocities.
-- **Keyboard control:** Drive forward, reverse, and turn with `W`, `A`, `S`, and `D`.
-- **2D environment:** Rectangular obstacles in world coordinates (metres).
-- **Collision detection:** Treats the robot as a circular footprint and prevents penetration of obstacles by rolling back unsafe motion steps.
-- **Distance sensors:** Three simulated ray-casting sensors at −45°, 0°, and +45° relative to the robot's heading.
-- **Footprint-aware emergency stopping:** Removes forward motion when the robot's circular footprint is within **0.3 m** of an obstacle along its current heading; turning and reverse remain available.
-- **Occupancy grid:** Discretizes the known environment into free and blocked cells for path planning. Cells are checked against the robot's radius, not just obstacle interiors.
-- **Real-time visualization:** SDL3 rendering for the robot, its heading, obstacles, sensor rays, and blocked grid cells.
-- **Fixed-step simulation:** Robot physics runs at **60 updates per second**.
+The robot has a 0.4 m collision radius. Planning inflates obstacles by the robot radius, 0.3 m safety clearance, and half a grid-cell diagonal so a free cell is safe throughout its area. The emergency stop removes forward wheel translation when straight-line footprint clearance reaches 0.3 m while preserving rotation. Reverse movement remains available.
 
-### In progress / planned
+## Build and run
 
-- **A\* pathfinding:** Calculate a path from the robot's grid cell to a mouse-selected destination.
-- **Path visualization:** Draw the planned route in the simulator window.
-- **Waypoint following:** Turn toward and drive between path waypoints automatically.
-- **Autonomous navigation:** Combine planning, motion control, and safety checks.
-- **Exploration and mapping (future extension):** Discover an initially unknown environment using sensor measurements, rather than reading the simulator's true obstacle map.
-
-> **Project status:** The occupancy grid has been added. A\* and mouse-selected destinations are the next development milestone; do not assume autonomous movement is available in the current build. If you've already added and verified `AStar.cpp`, update this section accordingly.
-
-## Preview
-
-The simulator displays:
-
-- A **blue triangular robot** with a **yellow heading indicator**.
-- **Red rectangles** representing obstacles.
-- **Green sensor rays** when no obstacle is detected within range, or **red rays** when an obstacle is detected.
-- **Translucent orange cells** indicating positions where the robot's **center** would cause its circular body to overlap an obstacle.
-
-_Add a screenshot or GIF here once captured:_
-
-```markdown
-![2D Robot Simulator](docs/simulator-preview.png)
-```
-
-## Tech stack
-
-| Technology | Purpose |
-| --- | --- |
-| C++20 | Simulation logic and algorithms |
-| SDL3 | Window, input handling, and 2D rendering |
-| CMake | Build configuration |
-| Git submodules | SDL source dependency under `external/SDL` |
-
-## Getting started
-
-### Prerequisites
-
-- A C++20-capable compiler (such as GCC or Clang)
-- CMake
-- Git
-- SDL3 build dependencies for your platform
-
-The documented commands below are for **Ubuntu/Linux**. The project uses SDL3 as a Git submodule, so the submodule must be available before building.
-
-### Clone
-
-```bash
-git clone --recurse-submodules <YOUR_REPOSITORY_URL>
-cd <YOUR_REPOSITORY_DIRECTORY>
-```
-
-If the repository was already cloned without submodules:
+SDL3 is included as a Git submodule. On Linux with CMake and a C++20 compiler:
 
 ```bash
 git submodule update --init --recursive
-```
-
-### Configure and build
-
-```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSDL_X11_XSCRNSAVER=OFF
-cmake --build build -j2
-```
-
-### Run
-
-```bash
-./build/robot_simulator
-```
-
-After making code changes, you normally only need to rebuild and run:
-
-```bash
 cmake --build build -j2
 ./build/robot_simulator
 ```
 
 ## Controls
 
-| Key | Action |
+| Control | Action |
 | --- | --- |
-| `W` | Move forward |
-| `S` | Move backward |
-| `A` | Turn left |
-| `D` | Turn right |
-| `W` + `A` / `D` | Move forward while steering |
-| `Esc` | Exit simulator |
+| W / S | Drive forward / reverse |
+| A / D | Turn left / right; combine with W or S |
+| Left click | Select a navigation destination |
+| Mouse wheel | Zoom camera |
+| F | Toggle camera follow |
+| Arrow keys | Pan while camera follow is off |
+| R | Reset camera to robot and resume following |
+| Esc | Quit |
 
-**Planned control:** Left-click a free position to choose an A\* destination (once click-to-plan has been implemented and tested).
+Manual driving cancels the current autonomous destination. The window title reports navigation state and zoom. A blue line shows the current A* path; the green marker shows the selected goal. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas.
 
-## How it works
+## Navigation and safety
 
-### 1. Differential-drive kinematics
+The maze has fixed world bounds of X = −20 to 20 m and Y = −15 to 15 m. The robot starts at (−17.5, −12.5), clear of obstacles. Both collision queries and distance rays include moving obstacles and the world boundary.
 
-The robot is controlled by its left and right wheel velocities:
+The static occupancy map is created once. During A*, cells overlapping the **current** moving-obstacle positions are treated as blocked. The controller checks upcoming path cells and stops when one becomes blocked. It replans after a cooldown, also replanning after prolonged lack of motion. Failed attempts have a longer retry delay; five failed plans or repeated replans without meaningful progress stop navigation. A new click starts a fresh request. A blocked or unreachable destination is reported in the window title and console.
 
-\[
-v = \frac{v_R + v_L}{2}, \qquad
-\omega = \frac{v_R - v_L}{L}
-\]
+**Planning limitation:** A* sees moving obstacles at their current positions. It does not predict where they will be when the robot arrives. Paths can therefore become invalid and require replanning.
 
-where:
+**Motion limitation:** `World::forwardClearance()` models straight-line travel along the current heading. Simultaneous driving and turning follows a curved path. Each physics update also checks the swept segment between short substeps and rolls back unsafe movement; moving obstacles refuse a step that would overlap the robot. These checks provide conservative local protection without predicting an entire future trajectory.
 
-- `v` is forward linear velocity.
-- `ω` is angular velocity.
-- `vL` and `vR` are left/right wheel velocities.
-- `L` is the distance between wheels.
+## Code layout
 
-The robot updates its position and heading each fixed physics timestep.
+- `World`: maze geometry, bounds, moving obstacles, collision and clearance queries.
+- `OccupancyGrid`: cached permanent occupancy plus live moving-obstacle checks.
+- `AStar`: eight-direction route search.
+- `Navigator`: differential-drive waypoint following.
+- `Camera`: follow, pan, zoom and coordinate conversions.
+- `Sensor`: ray-based distance readings.
+- `Robot`: differential-drive kinematics.
+- `main.cpp`: SDL input, fixed-step orchestration and rendering.
 
-### 2. World and collision detection
-
-Obstacles are axis-aligned rectangles. For safety, the robot is approximated as a circle with a **0.4 m radius**. After each movement update, collision detection checks whether the new pose overlaps any obstacle. If it does, the previous pose is restored.
-
-### 3. Simulated distance sensors
-
-The simulator casts three rays from the robot and checks for intersections with obstacles within a **4.0 m maximum range**. These readings are displayed in real time.
-
-### 4. Footprint-aware emergency stop
-
-Unlike a single forward sensor ray, `World::forwardClearance()` considers the robot's **entire circular footprint**. If an obstacle lies within the **0.3 m forward clearance threshold**, the controller cancels forward translation while preserving the commanded angular velocity.
-
-**Limitation:** The clearance calculation considers straight-line forward travel. Combined driving and turning follows a curved path; the collision rollback remains a separate safeguard. The simulator does not yet provide full trajectory-level collision checking.
-
-### 5. Occupancy grid
-
-The occupancy grid converts the continuous world into cells (currently **0.25 m per cell**). For each cell center, the simulator checks whether the robot's circular footprint would collide with an obstacle.
-
-This creates a grid for A\* search:
-
-- **Free cell:** The robot's center can occupy this position under the collision model.
-- **Blocked cell:** Placing the robot's center here would cause a collision, or the cell is outside grid bounds.
-
-The grid is built from **known world obstacles**, not from the robot's sensor observations. A later exploration extension will maintain a separate internal map.
-
-### 6. A\* pathfinding — next milestone
-
-The planned A\* module will search neighboring free cells using:
-
-\[
-f(n) = g(n) + h(n)
-\]
-
-where `g(n)` is the traveled path cost and `h(n)` estimates the remaining cost to the goal. The intended implementation supports eight-direction grid movement with a diagonal-corner-cutting check.
-
-A\* **plans a path**; it does not command the robot's wheels. Autonomous motion will require a separate waypoint-following controller.
-
-## Project structure
-
-```text
-2D-robot-simulator/
-├── CMakeLists.txt
-├── include/
-│   ├── Robot.hpp
-│   ├── World.hpp
-│   ├── Sensor.hpp
-│   └── OccupancyGrid.hpp
-├── src/
-│   ├── main.cpp
-│   ├── Robot.cpp
-│   ├── World.cpp
-│   ├── Sensor.cpp
-│   └── OccupancyGrid.cpp
-├── external/
-│   └── SDL/                 # Git submodule
-└── README.md
-```
-
-**Next files:** `include/AStar.hpp` and `src/AStar.cpp`. Later milestones may add a navigation controller and mapping modules.
-
-## Roadmap
-
-- [x] Differential-drive robot motion
-- [x] Manual keyboard control
-- [x] Rectangular obstacles and collision rollback
-- [x] Simulated ray-casting sensors
-- [x] Footprint-aware emergency stop
-- [x] Occupancy grid generation and visualization
-- [ ] A\* route calculation
-- [ ] Mouse-selected destination
-- [ ] Planned path rendering
-- [ ] Autonomous waypoint-following controller
-- [ ] Safe replanning when the route becomes invalid
-- [ ] Unknown-environment mapping and exploration
-- [ ] Localization / SLAM experiments
-
-## Testing
-
-The emergency-stop implementation has been checked with a standalone test harness covering head-on and diagonal approach, center-ray misses, obstacle corners, clear paths, reverse, rotation, collision rollback, tangency, and initially overlapping states. The project has also passed a CMake build and `git diff --check` during that milestone.
-
-**Not yet verified in those checks:** Interactive SDL rendering and any newly added A\* implementation. Test those separately after integration.
-
-## Educational goals
-
-This project is intended to develop practical knowledge of:
-
-- C++ class design and separation of header/source files
-- Robot motion models and coordinate transformations
-- Real-time simulation loops
-- Sensor simulation and collision geometry
-- Occupancy grids and graph-search algorithms
-- Autonomous navigation architecture
-
-## License
-
-No project license has been specified yet. Add a `LICENSE` file if you intend to make the repository available for reuse.
+The fixed simulation timestep is 1/60 s. The rendering camera does not change world-space physics or planning coordinates.

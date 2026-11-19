@@ -22,6 +22,7 @@ public:
     );
 
     bool isBlocked(int x, int y) const;
+    bool isStaticBlocked(int x, int y) const;
 
     GridCell worldToGrid(double x, double y) const;
 
@@ -38,6 +39,8 @@ private:
     double cellSize;
     double originX;
     double originY;
+    double inflationRadius;
+    const World& world;
 
     vector<vector<bool>> blocked;
 };

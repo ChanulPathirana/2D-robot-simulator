@@ -14,8 +14,10 @@ OccupancyGrid::OccupancyGrid(
     double robotRadius
 )
     : cellSize(size),
-      originX(-width / 2.0),
-      originY(-height / 2.0)
+      originX(World::minX),
+      originY(World::minY),
+      inflationRadius(robotRadius + size * sqrt(2.0) / 2.0),
+      world(world)
 {
     if (width <= 0 || height <= 0 || size <= 0) {
         throw invalid_argument("Invalid occupancy grid dimensions");
@@ -32,16 +34,21 @@ OccupancyGrid::OccupancyGrid(
             double worldX = gridToWorldX(x);
             double worldY = gridToWorldY(y);
 
-            blocked[y][x] = world.collides(
+            blocked[y][x] = world.collidesStatic(
                 worldX,
                 worldY,
-                robotRadius
+                inflationRadius
             );
         }
     }
 }
 
 bool OccupancyGrid::isBlocked(int x, int y) const {
+    if (isStaticBlocked(x, y)) return true;
+    return world.collidesDynamic(gridToWorldX(x), gridToWorldY(y), inflationRadius);
+}
+
+bool OccupancyGrid::isStaticBlocked(int x, int y) const {
     if (x < 0 || y < 0 || x >= cols || y >= rows) {
         return true;
     }

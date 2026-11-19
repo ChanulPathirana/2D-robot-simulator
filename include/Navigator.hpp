@@ -15,6 +15,7 @@ public:
     void update(Robot& robot, const OccupancyGrid& grid);
 
     bool isActive() const;
+    std::size_t waypointIndex() const;
 
 private:
     std::vector<GridCell> path;

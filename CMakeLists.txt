@@ -18,6 +18,7 @@ add_executable(robot_simulator
     src/OccupancyGrid.cpp
     src/AStar.cpp
     src/Navigator.cpp
+    src/Camera.cpp
     
     
 ) 

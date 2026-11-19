@@ -52,6 +52,10 @@ bool Navigator::isActive() const {
     return active;
 }
 
+size_t Navigator::waypointIndex() const {
+    return currentWaypoint;
+}
+
 void Navigator::update(
     Robot& robot,
     const OccupancyGrid& grid
