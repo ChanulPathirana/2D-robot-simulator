@@ -2,6 +2,7 @@
 #include "AStar.hpp"
 #include "Camera.hpp"
 #include "Lidar.hpp"
+#include "Mapping.hpp"
 #include "Navigator.hpp"
 #include "OccupancyGrid.hpp"
 #include "Robot.hpp"
@@ -250,6 +251,76 @@ void drawGrid(
     SDL_SetRenderDrawBlendMode(
         renderer, SDL_BLENDMODE_NONE
     );
+}
+
+// -------------------------------------
+// Draw only the robot's discovered occupancy map
+// -------------------------------------
+
+void drawDiscoveredMap(
+    SDL_Renderer* renderer,
+    const Camera& camera,
+    const Mapping& discoveredMap
+) {
+    const double cellSize = discoveredMap.getCellSize();
+    const double originX = discoveredMap.gridToWorldX(0) - cellSize * 0.5;
+    const double originY = discoveredMap.gridToWorldY(0) - cellSize * 0.5;
+    const double pixelSize = cellSize * camera.scale();
+
+    const ScreenPoint mapTopLeft = camera.toScreen(
+        originX,
+        originY + discoveredMap.getRows() * cellSize
+    );
+    const SDL_FRect mapRect{
+        mapTopLeft.x,
+        mapTopLeft.y,
+        static_cast<float>(discoveredMap.getCols() * pixelSize),
+        static_cast<float>(discoveredMap.getRows() * pixelSize)
+    };
+    if (!visible(mapRect)) {
+        return;
+    }
+
+    // One background fill represents all unknown cells without drawing
+    // thousands of identical rectangles every frame.
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, 45, 51, 61, 255);
+    SDL_RenderFillRect(renderer, &mapRect);
+
+    const auto [left, top] = camera.screenToWorld(0, 0);
+    const auto [right, bottom] = camera.screenToWorld(WIDTH, HEIGHT);
+    const int firstX = max(0, static_cast<int>(floor((left - originX) / cellSize)));
+    const int lastX = min(discoveredMap.getCols() - 1,
+        static_cast<int>(floor((right - originX) / cellSize)));
+    const int firstY = max(0, static_cast<int>(floor((bottom - originY) / cellSize)));
+    const int lastY = min(discoveredMap.getRows() - 1,
+        static_cast<int>(floor((top - originY) / cellSize)));
+
+    for (int y = firstY; y <= lastY; ++y) {
+        for (int x = firstX; x <= lastX; ++x) {
+            const CellState state = discoveredMap.getCell(x, y);
+            if (state == CellState::Unknown) {
+                continue;
+            }
+            if (state == CellState::Free) {
+                SDL_SetRenderDrawColor(renderer, 151, 177, 193, 255);
+            } else {
+                SDL_SetRenderDrawColor(renderer, 235, 96, 65, 255);
+            }
+
+            const ScreenPoint topLeft = camera.toScreen(
+                discoveredMap.gridToWorldX(x) - cellSize * 0.5,
+                discoveredMap.gridToWorldY(y) + cellSize * 0.5
+            );
+            const SDL_FRect cell{
+                topLeft.x,
+                topLeft.y,
+                static_cast<float>(pixelSize),
+                static_cast<float>(pixelSize)
+            };
+            SDL_RenderFillRect(renderer, &cell);
+        }
+    }
 }
 
 // -------------------------------------
@@ -688,6 +759,13 @@ int main(int argc, char* argv[]) {
 
     Lidar lidar(LIDAR_RAYS, LIDAR_RANGE);
 
+    // Robot-owned map: starts entirely unknown; no obstacle geometry is shared.
+    Mapping discoveredMap(
+        World::minX, World::minY,
+        World::maxX, World::maxY,
+        SimConfig::GRID_CELL_SIZE
+    );
+
     double lidarAccumulator = 0.0;
 
     // Store the position where the scan was taken.
@@ -695,9 +773,15 @@ int main(int argc, char* argv[]) {
     double lidarScanY = robot.y;
 
     bool showLidar = true;
+    bool showDiscoveredMap = false;
 
     // Initial scan, before any movement.
     lidar.scan(robot, world);
+
+    // Discover cells using the position of this initial scan.
+    discoveredMap.update(
+        lidar.getReadings(), lidarScanX, lidarScanY
+    );
 
     // ---------------------------------
     // Navigation path planner
@@ -768,6 +852,7 @@ int main(int argc, char* argv[]) {
         NavigationState::Arrived;
 
     int lastZoom = -1;
+    bool lastTitleDiscoveredMap = true;
 
     // =================================
     // Main simulation loop
@@ -804,6 +889,15 @@ int main(int argc, char* argv[]) {
 
                 if (event.key.scancode == SDL_SCANCODE_R) {
                     camera.reset(robot.x, robot.y);
+                }
+
+                if (event.key.scancode == SDL_SCANCODE_M) {
+                    showDiscoveredMap = !showDiscoveredMap;
+                }
+
+                if (event.key.scancode == SDL_SCANCODE_C) {
+                    discoveredMap.reset();
+                    lidarAccumulator = 0.0;
                 }
 
                 // NEW: Toggle LiDAR visualization
@@ -1117,6 +1211,12 @@ int main(int argc, char* argv[]) {
                 // Simulate a full 360-degree scan.
                 lidar.scan(robot, world);
 
+                // Update only when a fresh scan is available.
+                // Scan position and measurement angles belong to the same pose.
+                discoveredMap.update(
+                    lidar.getReadings(), lidarScanX, lidarScanY
+                );
+
                 lidarAccumulator -= LIDAR_INTERVAL;
             }
 
@@ -1132,7 +1232,8 @@ int main(int argc, char* argv[]) {
 
         if (
             state != lastTitleState ||
-            zoom != lastZoom
+            zoom != lastZoom ||
+            showDiscoveredMap != lastTitleDiscoveredMap
         ) {
 
             const string title =
@@ -1140,7 +1241,8 @@ int main(int argc, char* argv[]) {
                 stateName(state) +
                 " | Zoom " +
                 to_string(zoom) +
-                " px/m";
+                " px/m | " +
+                (showDiscoveredMap ? "Discovered map" : "Complete maze");
 
             SDL_SetWindowTitle(
                 window,
@@ -1149,6 +1251,7 @@ int main(int argc, char* argv[]) {
 
             lastTitleState = state;
             lastZoom = zoom;
+            lastTitleDiscoveredMap = showDiscoveredMap;
         }
 
         // =============================
@@ -1161,34 +1264,38 @@ int main(int argc, char* argv[]) {
 
         SDL_RenderClear(renderer);
 
-        drawFloor(renderer, camera);
+        if (showDiscoveredMap) {
+            drawDiscoveredMap(renderer, camera, discoveredMap);
+        } else {
+            drawFloor(renderer, camera);
 
-        drawGrid(
-            renderer,
-            camera,
-            grid,
-            world
-        );
+            drawGrid(
+                renderer,
+                camera,
+                grid,
+                world
+            );
 
-        drawWorld(
-            renderer,
-            camera,
-            world
-        );
+            drawWorld(
+                renderer,
+                camera,
+                world
+            );
 
-        drawPath(
-            renderer,
-            camera,
-            grid,
-            path
-        );
+            drawPath(
+                renderer,
+                camera,
+                grid,
+                path
+            );
 
-        drawGoal(
-            renderer,
-            camera,
-            grid,
-            goal
-        );
+            drawGoal(
+                renderer,
+                camera,
+                grid,
+                goal
+            );
+        }
 
         // NEW: Display 360-degree LiDAR
         if (showLidar) {

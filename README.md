@@ -9,7 +9,7 @@ A C++20 and SDL3 simulator for a differential-drive robot navigating a fixed 40 
 - A 0.25 m occupancy grid. Permanent blocked cells are built once; moving obstacles are queried as a temporary layer during planning.
 - Eight-direction A* with diagonal corner-cutting prevention and a waypoint-following controller.
 - A robot-following camera with zoom, manual pan, and camera-aware mouse targeting.
-- Three visible distance rays, footprint-aware emergency stopping, and collision rollback.
+- A 72-ray, 360° LiDAR scan at about 10 Hz, a separate robot-discovered occupancy map, footprint-aware emergency stopping, and collision rollback.
 
 The robot has a 0.4 m collision radius. Planning inflates obstacles by the robot radius, 0.3 m safety clearance, and half a grid-cell diagonal so a free cell is safe throughout its area. The emergency stop removes forward wheel translation when straight-line footprint clearance reaches 0.3 m while preserving rotation. Reverse movement remains available.
 
@@ -35,9 +35,18 @@ cmake --build build -j2
 | F | Toggle camera follow |
 | Arrow keys | Pan while camera follow is off |
 | R | Reset camera to robot and resume following |
+| M | Switch between complete-maze and discovered-map views |
+| C | Clear the discovered map; the next scans rebuild it |
+| L | Show or hide LiDAR rays; scanning and mapping continue |
 | Esc | Quit |
 
 Manual driving cancels the current autonomous destination. The window title reports navigation state and zoom. A blue line shows the current A* path; the green marker shows the selected goal. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas.
+
+## LiDAR occupancy mapping
+
+The robot starts with an **Unknown** map and records **Free** cells along each LiDAR ray and **Occupied** cells at detected surfaces. The first scan runs at startup. Further scans arrive about every 0.1 s using the robot position where each scan was taken. Drive with W/A/S/D, or choose a destination with left click, then press **M** to watch light blue-grey free space and red-orange obstacle cells appear against dark-grey unknown space. Press **C** to make every discovered cell unknown again; later scans rebuild the map. **L** changes ray visibility only.
+
+The complete-maze view shows the physical walls, moving obstacles, planning grid, route, and goal. The discovered-map view shows only the robot's occupancy map, robot, and optionally LiDAR rays; it hides the complete-map route and goal. Switching views does not change physics or navigation. A* still plans with the complete known `OccupancyGrid`, even while the discovered map is displayed. The map uses the exact simulated robot pose, so localization uncertainty is not modeled and this is not yet full SLAM. Moving-obstacle observations may remain in the discovered map until later scans update those cells.
 
 ## Navigation and safety
 
@@ -56,6 +65,7 @@ The static occupancy map is created once. During A*, cells overlapping the **cur
 - `AStar`: eight-direction route search.
 - `Navigator`: differential-drive waypoint following.
 - `Camera`: follow, pan, zoom and coordinate conversions.
+- `Lidar` and `Mapping`: 360° measurements and the robot's discovered occupancy cells.
 - `Sensor`: ray-based distance readings.
 - `Robot`: differential-drive kinematics.
 - `main.cpp`: SDL input, fixed-step orchestration and rendering.
