@@ -16,6 +16,9 @@ add_executable(robot_simulator
     src/World.cpp
     src/Sensor.cpp
     src/OccupancyGrid.cpp
+    src/AStar.cpp
+    
+    
 ) 
 
 # Header directory
