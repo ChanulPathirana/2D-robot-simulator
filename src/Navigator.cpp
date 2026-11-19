@@ -58,7 +58,7 @@ size_t Navigator::waypointIndex() const {
 
 void Navigator::update(
     Robot& robot,
-    const OccupancyGrid& grid
+    const NavigationGrid& grid
 ) {
     if (!active) {
         setWheelSpeeds(robot, 0.0, 0.0);

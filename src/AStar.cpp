@@ -32,7 +32,7 @@ struct Node {
 } // namespace
 
 vector<GridCell> AStar::findPath(
-    const OccupancyGrid& grid,
+    const NavigationGrid& grid,
     GridCell start,
     GridCell goal
 ) {

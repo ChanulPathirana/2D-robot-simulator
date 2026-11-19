@@ -29,7 +29,8 @@ double snapGridBoundary(double coordinate) {
 
 Mapping::Mapping(double minX, double minY, double maxX, double maxY,
                  double size, MappingParameters settings)
-    : cellSize(size), originX(minX), originY(minY), parameters(settings)
+    : cellSize(size), originX(minX), originY(minY),
+      maxX(maxX), maxY(maxY), parameters(settings)
 {
     if (!isfinite(minX) || !isfinite(minY) ||
         !isfinite(maxX) || !isfinite(maxY) || !isfinite(size) ||
@@ -87,6 +88,10 @@ double Mapping::getOccupancyProbability(int x, int y) const {
 int Mapping::getRows() const { return rows; }
 int Mapping::getCols() const { return cols; }
 double Mapping::getCellSize() const { return cellSize; }
+double Mapping::getMinX() const { return originX; }
+double Mapping::getMinY() const { return originY; }
+double Mapping::getMaxX() const { return maxX; }
+double Mapping::getMaxY() const { return maxY; }
 
 double Mapping::gridToWorldX(int x) const {
     return originX + (x + 0.5) * cellSize;

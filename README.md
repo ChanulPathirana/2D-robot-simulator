@@ -7,11 +7,11 @@ A C++20 and SDL3 simulator for a differential-drive robot navigating a fixed 40 
 - A handcrafted, connected maze with 38 permanent wall segments and blocks, long corridors, alternate routes, open turning areas, and dead ends.
 - Four deterministic moving rectangles that travel along fixed routes, pause, and reverse. They stop or reverse before crossing a wall, another moving object, or the robot.
 - A 0.25 m occupancy grid. Permanent blocked cells are built once; moving obstacles are queried as a temporary layer during planning.
-- Eight-direction A* with diagonal corner-cutting prevention and a waypoint-following controller.
+- Eight-direction A* with diagonal corner-cutting prevention and a waypoint-following controller. Planning can use either the complete maze or the robot's LiDAR-discovered map.
 - A robot-following camera with zoom, manual pan, and camera-aware mouse targeting.
 - A 72-ray, 360° LiDAR scan at about 10 Hz, a separate robot-discovered occupancy map, footprint-aware emergency stopping, and collision rollback.
 
-The robot has a 0.4 m collision radius. Planning inflates obstacles by the robot radius, 0.3 m safety clearance, and half a grid-cell diagonal so a free cell is safe throughout its area. The emergency stop removes forward wheel translation when straight-line footprint clearance reaches 0.3 m while preserving rotation. Reverse movement remains available.
+The robot has a 0.4 m collision radius. Known-map planning inflates obstacles by the robot radius, 0.3 m safety clearance, and half a grid-cell diagonal so a free cell is safe throughout its area. Discovered-map planning uses the same 0.7 m clearance measured between grid-cell squares. The emergency stop removes forward wheel translation when straight-line footprint clearance reaches 0.3 m while preserving rotation. Reverse movement remains available.
 
 ## Build and run
 
@@ -36,11 +36,12 @@ cmake --build build -j2
 | Arrow keys | Pan while camera follow is off |
 | R | Reset camera to robot and resume following |
 | M | Switch between complete-maze and discovered-map views |
+| P | Switch A* planning between Known Map and Discovered Map |
 | C | Clear the discovered map; the next scans rebuild it |
 | L | Show or hide LiDAR rays; scanning and mapping continue |
 | Esc | Quit |
 
-Manual driving cancels the current autonomous destination. The window title reports navigation state and zoom. A blue line shows the current A* path; the green marker shows the selected goal. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas.
+Manual driving cancels the current autonomous destination. The window title reports navigation state, planning mode, and zoom. A blue line shows the current A* path; the green marker shows the selected goal. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas. **M** only changes the view; **P** changes the planner and cancels the previous route.
 
 ## LiDAR occupancy mapping
 
@@ -60,7 +61,15 @@ Observed cells between the classification thresholds remain **Unknown**. The dis
 
 The initial values can be tuned through `MappingParameters`. `Mapping::getOccupancyProbability(x, y)` returns 0.5 for an out-of-bounds cell, while `getCell(x, y)` returns `Unknown`.
 
-The complete-maze view shows the physical walls, moving obstacles, planning grid, route, and goal. The discovered-map view shows only the robot's occupancy map, robot, and optionally LiDAR rays; it hides the complete-map route and goal. Switching views does not change physics or navigation. A* still plans with the complete known `OccupancyGrid`, even while the discovered map is displayed. The map uses the exact simulated robot pose, so localization uncertainty is not modeled and this is not yet full SLAM. Moving obstacles may leave temporary occupied evidence; later clear observations can lower that confidence, but the map does not track moving objects explicitly.
+The complete-maze view shows the physical walls, moving obstacles, planning grid, route, and goal. The discovered-map view shows the robot's occupancy map, robot, and optionally LiDAR rays. It shows the route and goal only when they were planned from the discovered map, so a known-map route cannot reveal unexplored space. Switching views does not change physics or navigation. The map uses the exact simulated robot pose, so localization uncertainty is not modeled and this is not yet full SLAM. Moving obstacles may leave temporary occupied evidence; later clear observations can lower that confidence, but the map does not track moving objects explicitly.
+
+## Planning with the discovered map
+
+Press **P** for Discovered Map planning, then left-click a location already scanned as Free. A* uses the same eight-direction search as Known Map mode, but its grid is built only from LiDAR evidence. Unknown and Occupied cells are blocked. The planner also requires 0.7 m of Euclidean clearance around each candidate cell from unsafe cells and the world boundary. This includes the 0.4 m robot radius and 0.3 m safety margin. The first scan makes a small safe region around the robot available; driving or navigating reveals more space.
+
+An unknown, occupied, or insufficiently clear destination is rejected and reported in the console and window title. If a fresh scan blocks the remaining route, navigation pauses and uses the existing bounded replan cooldown. **C** clears the discovered map and cancels a route that depended on it. Known Map navigation continues when **C** is pressed, because it uses the separate complete-map grid. Switching planning modes with **P** cancels the current route and destination; click again to select a goal in the new mode.
+
+Discovered-map planning uses current observations only. It does not predict moving-obstacle trajectories, and a temporary obstacle can leave map evidence until later clear scans reduce it. Goals beyond the observed safe area cannot yet be reached automatically. Frontier-based autonomous exploration is planned for Milestone 14.
 
 ## Navigation and safety
 
@@ -75,7 +84,8 @@ The static occupancy map is created once. During A*, cells overlapping the **cur
 ## Code layout
 
 - `World`: maze geometry, bounds, moving obstacles, collision and clearance queries.
-- `OccupancyGrid`: cached permanent occupancy plus live moving-obstacle checks.
+- `OccupancyGrid`: cached permanent occupancy plus live moving-obstacle checks for Known Map planning.
+- `DiscoveredPlanningGrid`: cached robot-footprint traversability derived only from the discovered map.
 - `AStar`: eight-direction route search.
 - `Navigator`: differential-drive waypoint following.
 - `Camera`: follow, pan, zoom and coordinate conversions.

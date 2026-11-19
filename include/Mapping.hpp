@@ -38,6 +38,10 @@ public:
     int getRows() const;
     int getCols() const;
     double getCellSize() const;
+    double getMinX() const;
+    double getMinY() const;
+    double getMaxX() const;
+    double getMaxY() const;
 
     double gridToWorldX(int x) const;
     double gridToWorldY(int y) const;
@@ -57,6 +61,8 @@ private:
     double cellSize;
     double originX;
     double originY;
+    double maxX;
+    double maxY;
 
     MappingParameters parameters;
     double occupiedIncrement = 0.0;

@@ -21,6 +21,7 @@ add_executable(robot_simulator
     src/Camera.cpp
     src/Lidar.cpp
     src/Mapping.cpp
+    src/DiscoveredPlanningGrid.cpp
     
 ) 
 
@@ -43,4 +44,19 @@ if(BUILD_TESTING)
     )
     target_include_directories(mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME mapping_tests COMMAND mapping_tests)
+
+    add_executable(planning_tests
+        tests/PlanningTests.cpp
+        src/AStar.cpp
+        src/DiscoveredPlanningGrid.cpp
+        src/Lidar.cpp
+        src/Mapping.cpp
+        src/Navigator.cpp
+        src/OccupancyGrid.cpp
+        src/Robot.cpp
+        src/Sensor.cpp
+        src/World.cpp
+    )
+    target_include_directories(planning_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME planning_tests COMMAND planning_tests)
 endif()

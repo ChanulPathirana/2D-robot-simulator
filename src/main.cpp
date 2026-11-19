@@ -1,11 +1,14 @@
 
 #include "AStar.hpp"
 #include "Camera.hpp"
+#include "DiscoveredPlanningGrid.hpp"
 #include "Lidar.hpp"
 #include "Mapping.hpp"
 #include "Navigator.hpp"
 #include "OccupancyGrid.hpp"
+#include "PlanningMode.hpp"
 #include "Robot.hpp"
+#include "RouteValidation.hpp"
 #include "Sensor.hpp"
 #include "SimulationConfig.hpp"
 #include "World.hpp"
@@ -506,7 +509,7 @@ void drawLidar(
 void drawPath(
     SDL_Renderer* renderer,
     const Camera& camera,
-    const OccupancyGrid& grid,
+    const NavigationGrid& grid,
     const vector<GridCell>& path
 ) {
     SDL_SetRenderDrawColor(
@@ -552,7 +555,7 @@ void drawPath(
 void drawGoal(
     SDL_Renderer* renderer,
     const Camera& camera,
-    const OccupancyGrid& grid,
+    const NavigationGrid& grid,
     optional<GridCell> goal
 ) {
     if (!goal) {
@@ -652,27 +655,6 @@ void applyEmergencyStop(
         robot.rightSpeed =
             omega * robot.wheelBase * 0.5;
     }
-}
-
-// -------------------------------------
-// Check whether route is obstructed
-// -------------------------------------
-
-bool routeBlockedAhead(
-    const Navigator& navigator,
-    const OccupancyGrid& grid,
-    const vector<GridCell>& path
-) {
-    const size_t from = navigator.waypointIndex();
-    const size_t to = min(path.size(), from + 20);
-
-    for (size_t i = from; i < to; ++i) {
-        if (grid.isBlocked(path[i].x, path[i].y)) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 } // namespace
@@ -783,11 +765,22 @@ int main(int argc, char* argv[]) {
         lidar.getReadings(), lidarScanX, lidarScanY
     );
 
+    DiscoveredPlanningGrid discoveredGrid(
+        discoveredMap, SimConfig::PLANNING_RADIUS
+    );
+    PlanningMode planningMode = PlanningMode::KnownMap;
+
+    auto activeGrid = [&]() -> const NavigationGrid& {
+        return planningMode == PlanningMode::KnownMap
+            ? static_cast<const NavigationGrid&>(grid)
+            : static_cast<const NavigationGrid&>(discoveredGrid);
+    };
+
     // ---------------------------------
     // Navigation path planner
     // ---------------------------------
 
-    auto planToGoal = [&] {
+    auto planToGoal = [&](bool initialRequest = false) {
 
         if (!goal) {
             return;
@@ -806,17 +799,28 @@ int main(int argc, char* argv[]) {
             return;
         }
 
-        path = AStar::findPath(
-            grid,
-            grid.worldToGrid(robot.x, robot.y),
-            *goal
-        );
+        const NavigationGrid& planningGrid = activeGrid();
+        const GridCell start = planningGrid.worldToGrid(robot.x, robot.y);
+
+        if (planningMode == PlanningMode::DiscoveredMap &&
+            (planningGrid.isBlocked(start.x, start.y) ||
+             planningGrid.isBlocked(goal->x, goal->y))) {
+            navigator.stop();
+            path.clear();
+            state = NavigationState::NoPath;
+            cout << "Start or destination lacks safe traversable space "
+                 << "in the discovered map.\n";
+            return;
+        }
+
+        path = AStar::findPath(planningGrid, start, *goal);
 
         if (path.empty()) {
 
             navigator.stop();
 
-            if (++failedReplans >= MAX_FAILED_REPLANS) {
+            if ((planningMode == PlanningMode::DiscoveredMap && initialRequest) ||
+                ++failedReplans >= MAX_FAILED_REPLANS) {
                 state = NavigationState::NoPath;
 
                 cout
@@ -853,6 +857,7 @@ int main(int argc, char* argv[]) {
 
     int lastZoom = -1;
     bool lastTitleDiscoveredMap = true;
+    PlanningMode lastTitlePlanningMode = PlanningMode::DiscoveredMap;
 
     // =================================
     // Main simulation loop
@@ -895,9 +900,28 @@ int main(int argc, char* argv[]) {
                     showDiscoveredMap = !showDiscoveredMap;
                 }
 
+                if (event.key.scancode == SDL_SCANCODE_P) {
+                    switchPlanningMode(planningMode, navigator, robot, path, goal);
+                    state = NavigationState::Idle;
+                    failedReplans = 0;
+                    replansWithoutProgress = 0;
+                    cout << "Planning mode: "
+                         << (planningMode == PlanningMode::KnownMap
+                             ? "Known Map" : "Discovered Map") << '\n';
+                }
+
                 if (event.key.scancode == SDL_SCANCODE_C) {
-                    discoveredMap.reset();
+                    resetDiscoveredMap(
+                        discoveredMap, discoveredGrid, planningMode,
+                        navigator, robot, path, goal
+                    );
                     lidarAccumulator = 0.0;
+                    if (planningMode == PlanningMode::DiscoveredMap) {
+                        state = NavigationState::Idle;
+                        failedReplans = 0;
+                        replansWithoutProgress = 0;
+                        cout << "Discovered map reset; navigation cancelled.\n";
+                    }
                 }
 
                 // NEW: Toggle LiDAR visualization
@@ -926,7 +950,7 @@ int main(int argc, char* argv[]) {
                         event.button.y
                     );
 
-                goal = grid.worldToGrid(
+                goal = activeGrid().worldToGrid(
                     targetX,
                     targetY
                 );
@@ -942,17 +966,20 @@ int main(int argc, char* argv[]) {
 
                 replanTimer = 0.0;
 
-                if (grid.isStaticBlocked(
-                    goal->x,
-                    goal->y
-                )) {
+                if (planningMode == PlanningMode::KnownMap &&
+                    grid.isStaticBlocked(goal->x, goal->y)) {
                     state = NavigationState::NoPath;
 
                     cout
                         << "Destination is outside "
                         << "the navigable maze.\n";
+                } else if (planningMode == PlanningMode::DiscoveredMap &&
+                           discoveredGrid.isBlocked(goal->x, goal->y)) {
+                    state = NavigationState::NoPath;
+                    cout << "Destination is unknown, occupied, or too close "
+                         << "to unsafe space in the discovered map.\n";
                 } else {
-                    planToGoal();
+                    planToGoal(true);
                 }
             }
         }
@@ -1032,13 +1059,18 @@ int main(int argc, char* argv[]) {
                     planToGoal();
                 }
 
+                const GridCell currentCell = activeGrid().worldToGrid(robot.x, robot.y);
+
                 if (
                     navigator.isActive() &&
-                    routeBlockedAhead(
-                        navigator,
-                        grid,
-                        path
-                    )
+                    (routeBlockedAhead(
+                         navigator,
+                         activeGrid(),
+                         path,
+                         planningMode == PlanningMode::DiscoveredMap
+                     ) ||
+                     (planningMode == PlanningMode::DiscoveredMap &&
+                      discoveredGrid.isBlocked(currentCell.x, currentCell.y)))
                 ) {
                     navigator.stop();
                     path.clear();
@@ -1053,7 +1085,7 @@ int main(int argc, char* argv[]) {
 
                 if (navigator.isActive()) {
 
-                    navigator.update(robot, grid);
+                    navigator.update(robot, activeGrid());
 
                     if (!navigator.isActive()) {
                         path.clear();
@@ -1216,6 +1248,7 @@ int main(int argc, char* argv[]) {
                 discoveredMap.update(
                     lidar.getReadings(), lidarScanX, lidarScanY
                 );
+                discoveredGrid.rebuild();
 
                 lidarAccumulator -= LIDAR_INTERVAL;
             }
@@ -1233,7 +1266,8 @@ int main(int argc, char* argv[]) {
         if (
             state != lastTitleState ||
             zoom != lastZoom ||
-            showDiscoveredMap != lastTitleDiscoveredMap
+            showDiscoveredMap != lastTitleDiscoveredMap ||
+            planningMode != lastTitlePlanningMode
         ) {
 
             const string title =
@@ -1242,7 +1276,9 @@ int main(int argc, char* argv[]) {
                 " | Zoom " +
                 to_string(zoom) +
                 " px/m | " +
-                (showDiscoveredMap ? "Discovered map" : "Complete maze");
+                (showDiscoveredMap ? "Discovered view" : "Complete view") +
+                " | Plan: " +
+                (planningMode == PlanningMode::KnownMap ? "Known" : "Discovered");
 
             SDL_SetWindowTitle(
                 window,
@@ -1252,6 +1288,7 @@ int main(int argc, char* argv[]) {
             lastTitleState = state;
             lastZoom = zoom;
             lastTitleDiscoveredMap = showDiscoveredMap;
+            lastTitlePlanningMode = planningMode;
         }
 
         // =============================
@@ -1266,6 +1303,10 @@ int main(int argc, char* argv[]) {
 
         if (showDiscoveredMap) {
             drawDiscoveredMap(renderer, camera, discoveredMap);
+            if (planningMode == PlanningMode::DiscoveredMap) {
+                drawPath(renderer, camera, activeGrid(), path);
+                drawGoal(renderer, camera, activeGrid(), goal);
+            }
         } else {
             drawFloor(renderer, camera);
 
@@ -1285,14 +1326,14 @@ int main(int argc, char* argv[]) {
             drawPath(
                 renderer,
                 camera,
-                grid,
+                activeGrid(),
                 path
             );
 
             drawGoal(
                 renderer,
                 camera,
-                grid,
+                activeGrid(),
                 goal
             );
         }

@@ -2,7 +2,7 @@
 #pragma once
 
 #include "Robot.hpp"
-#include "OccupancyGrid.hpp"
+#include "NavigationGrid.hpp"
 
 #include <cstddef>
 #include <vector>
@@ -12,7 +12,7 @@ public:
     void setPath(const std::vector<GridCell>& newPath);
     void stop();
 
-    void update(Robot& robot, const OccupancyGrid& grid);
+    void update(Robot& robot, const NavigationGrid& grid);
 
     bool isActive() const;
     std::size_t waypointIndex() const;
