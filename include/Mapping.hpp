@@ -11,6 +11,15 @@ enum class CellState : std::uint8_t {
     Occupied
 };
 
+struct MappingParameters {
+    double occupiedObservationProbability = 0.70;
+    double freeObservationProbability = 0.30;
+    double minLogOdds = -4.0;
+    double maxLogOdds = 4.0;
+    double occupiedThreshold = 0.65;
+    double freeThreshold = 0.35;
+};
+
 class Mapping {
 public:
     Mapping(
@@ -18,10 +27,13 @@ public:
         double minY,
         double maxX,
         double maxY,
-        double cellSize
+        double cellSize,
+        MappingParameters parameters = {}
     );
 
     CellState getCell(int x, int y) const;
+    // Out-of-bounds cells have the unknown prior probability of 0.5.
+    double getOccupancyProbability(int x, int y) const;
 
     int getRows() const;
     int getCols() const;
@@ -46,9 +58,17 @@ private:
     double originX;
     double originY;
 
-    std::vector<CellState> cells;
+    MappingParameters parameters;
+    double occupiedIncrement = 0.0;
+    double freeIncrement = 0.0;
+    double occupiedThresholdLogOdds = 0.0;
+    double freeThresholdLogOdds = 0.0;
+
+    std::vector<double> logOdds;
+    std::vector<std::uint8_t> observed;
 
     bool inBounds(int x, int y) const;
+    void addEvidence(int x, int y, double increment);
 
     void updateRay(
         const LidarReading& reading,

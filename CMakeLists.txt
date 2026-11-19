@@ -34,3 +34,13 @@ target_include_directories(robot_simulator
 target_link_libraries(robot_simulator
     PRIVATE SDL3::SDL3
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(mapping_tests
+        tests/MappingTests.cpp
+        src/Mapping.cpp
+    )
+    target_include_directories(mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME mapping_tests COMMAND mapping_tests)
+endif()

@@ -1,65 +1,92 @@
-
 #include "Mapping.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
 #include <limits>
+#include <stdexcept>
 
 using namespace std;
 
-Mapping::Mapping(
-    double minX,
-    double minY,
-    double maxX,
-    double maxY,
-    double size
-)
-    : cellSize(size),
-      originX(minX),
-      originY(minY)
+namespace {
+
+double logit(double probability) {
+    return log(probability) - log1p(-probability);
+}
+
+bool validProbability(double probability) {
+    return isfinite(probability) && probability > 0.0 && probability < 1.0;
+}
+
+double snapGridBoundary(double coordinate) {
+    if (!isfinite(coordinate)) return coordinate;
+    const double nearest = nearbyint(coordinate);
+    const double tolerance = 32.0 * numeric_limits<double>::epsilon()
+        * max(1.0, abs(coordinate));
+    return abs(coordinate - nearest) <= tolerance ? nearest : coordinate;
+}
+
+} // namespace
+
+Mapping::Mapping(double minX, double minY, double maxX, double maxY,
+                 double size, MappingParameters settings)
+    : cellSize(size), originX(minX), originY(minY), parameters(settings)
 {
-    if (maxX <= minX ||
-        maxY <= minY ||
-        size <= 0.0) {
+    if (!isfinite(minX) || !isfinite(minY) ||
+        !isfinite(maxX) || !isfinite(maxY) || !isfinite(size) ||
+        maxX <= minX || maxY <= minY || size <= 0.0) {
         throw invalid_argument("Invalid map dimensions");
     }
+    if (!validProbability(settings.occupiedObservationProbability) ||
+        !validProbability(settings.freeObservationProbability) ||
+        !validProbability(settings.occupiedThreshold) ||
+        !validProbability(settings.freeThreshold) ||
+        settings.freeObservationProbability >= 0.5 ||
+        settings.occupiedObservationProbability <= 0.5 ||
+        settings.freeThreshold >= 0.5 || settings.occupiedThreshold <= 0.5 ||
+        !isfinite(settings.minLogOdds) || !isfinite(settings.maxLogOdds) ||
+        settings.minLogOdds >= 0.0 || settings.maxLogOdds <= 0.0) {
+        throw invalid_argument("Invalid mapping parameters");
+    }
 
-    cols = static_cast<int>(
-        ceil((maxX - minX) / cellSize)
-    );
+    const double columnCount = ceil((maxX - minX) / cellSize);
+    const double rowCount = ceil((maxY - minY) / cellSize);
+    if (!isfinite(columnCount) || !isfinite(rowCount) ||
+        columnCount < 1.0 || rowCount < 1.0 ||
+        columnCount > numeric_limits<int>::max() ||
+        rowCount > numeric_limits<int>::max() ||
+        columnCount * rowCount > numeric_limits<int>::max()) {
+        throw invalid_argument("Map has too many cells");
+    }
+    cols = static_cast<int>(columnCount);
+    rows = static_cast<int>(rowCount);
 
-    rows = static_cast<int>(
-        ceil((maxY - minY) / cellSize)
-    );
+    occupiedIncrement = logit(settings.occupiedObservationProbability);
+    freeIncrement = logit(settings.freeObservationProbability);
+    occupiedThresholdLogOdds = logit(settings.occupiedThreshold);
+    freeThresholdLogOdds = logit(settings.freeThreshold);
 
-    // All cells start UNKNOWN.
-    cells.assign(
-        rows * cols,
-        CellState::Unknown
-    );
+    logOdds.assign(static_cast<size_t>(rows) * cols, 0.0);
+    observed.assign(logOdds.size(), 0);
 }
 
 CellState Mapping::getCell(int x, int y) const {
-    if (x < 0 || y < 0 ||
-        x >= cols || y >= rows) {
-        return CellState::Unknown;
-    }
-
-    return cells[y * cols + x];
+    if (!inBounds(x, y)) return CellState::Unknown;
+    const size_t index = static_cast<size_t>(y) * cols + x;
+    if (!observed[index]) return CellState::Unknown;
+    if (logOdds[index] <= freeThresholdLogOdds) return CellState::Free;
+    if (logOdds[index] >= occupiedThresholdLogOdds) return CellState::Occupied;
+    return CellState::Unknown;
 }
 
-int Mapping::getRows() const {
-    return rows;
+double Mapping::getOccupancyProbability(int x, int y) const {
+    if (!inBounds(x, y)) return 0.5;
+    const double value = logOdds[static_cast<size_t>(y) * cols + x];
+    return 1.0 / (1.0 + exp(-value));
 }
 
-int Mapping::getCols() const {
-    return cols;
-}
-
-double Mapping::getCellSize() const {
-    return cellSize;
-}
+int Mapping::getRows() const { return rows; }
+int Mapping::getCols() const { return cols; }
+double Mapping::getCellSize() const { return cellSize; }
 
 double Mapping::gridToWorldX(int x) const {
     return originX + (x + 0.5) * cellSize;
@@ -70,162 +97,107 @@ double Mapping::gridToWorldY(int y) const {
 }
 
 void Mapping::reset() {
-    fill(
-        cells.begin(),
-        cells.end(),
-        CellState::Unknown
-    );
+    fill(logOdds.begin(), logOdds.end(), 0.0);
+    fill(observed.begin(), observed.end(), 0);
 }
 
 bool Mapping::inBounds(int x, int y) const {
-    return x >= 0 && x < cols &&
-           y >= 0 && y < rows;
+    return x >= 0 && x < cols && y >= 0 && y < rows;
 }
 
-void Mapping::update(
-    const vector<LidarReading>& readings,
-    double sensorX,
-    double sensorY
-) {
-    // Process each laser measurement.
-    for (const auto& reading : readings) {
-        updateRay(reading, sensorX, sensorY);
-    }
+void Mapping::addEvidence(int x, int y, double increment) {
+    if (!inBounds(x, y)) return;
+    const size_t index = static_cast<size_t>(y) * cols + x;
+    logOdds[index] = clamp(logOdds[index] + increment,
+                           parameters.minLogOdds, parameters.maxLogOdds);
+    observed[index] = 1;
 }
 
-void Mapping::updateRay(
-    const LidarReading& reading,
-    double sensorX,
-    double sensorY
-) {
-    if (!isfinite(reading.angle) ||
-        !isfinite(reading.distance) ||
-        reading.distance <= 0.0) {
-        return;
+void Mapping::update(const vector<LidarReading>& readings,
+                     double sensorX, double sensorY) {
+    if (!isfinite(sensorX) || !isfinite(sensorY)) return;
+    const double startX = (sensorX - originX) / cellSize;
+    const double startY = (sensorY - originY) / cellSize;
+    if (!(startX >= 0.0 && startX < cols &&
+          startY >= 0.0 && startY < rows)) return;
+    for (const auto& reading : readings) updateRay(reading, sensorX, sensorY);
+}
+
+void Mapping::updateRay(const LidarReading& reading,
+                        double sensorX, double sensorY) {
+    if (!isfinite(reading.angle) || !isfinite(reading.distance) ||
+        reading.distance <= 0.0) return;
+
+    // Treat numerical axis components below this scale as zero. A six-metre
+    // ray then drifts by less than a trillionth of a metre on that axis.
+    const double rawDx = cos(reading.angle);
+    const double rawDy = sin(reading.angle);
+    const double dx = abs(rawDx) < 1e-12 ? 0.0 : rawDx;
+    const double dy = abs(rawDy) < 1e-12 ? 0.0 : rawDy;
+    const int stepX = (dx > 0.0) - (dx < 0.0);
+    const int stepY = (dy > 0.0) - (dy < 0.0);
+    const double infinity = numeric_limits<double>::infinity();
+
+    // A ray leaving an exact grid boundary in a negative direction starts
+    // in the cell on that side, rather than briefly marking the other cell.
+    double startGridX = snapGridBoundary((sensorX - originX) / cellSize);
+    double startGridY = snapGridBoundary((sensorY - originY) / cellSize);
+    if (stepX < 0) startGridX = nextafter(startGridX, -infinity);
+    if (stepY < 0) startGridY = nextafter(startGridY, -infinity);
+    int x = static_cast<int>(floor(startGridX));
+    int y = static_cast<int>(floor(startGridY));
+    if (!inBounds(x, y)) return;
+
+    int hitCellX = -1, hitCellY = -1;
+    if (reading.hit) {
+        const double endX = fma(reading.distance, dx, sensorX);
+        const double endY = fma(reading.distance, dy, sensorY);
+        if (!isfinite(endX) || !isfinite(endY)) return;
+        double endGridX = snapGridBoundary((endX - originX) / cellSize);
+        double endGridY = snapGridBoundary((endY - originY) / cellSize);
+        if (stepX != 0) endGridX = nextafter(endGridX, stepX > 0 ? infinity : -infinity);
+        if (stepY != 0) endGridY = nextafter(endGridY, stepY > 0 ? infinity : -infinity);
+        if (endGridX >= 0.0 && endGridX < cols &&
+            endGridY >= 0.0 && endGridY < rows) {
+            hitCellX = static_cast<int>(floor(endGridX));
+            hitCellY = static_cast<int>(floor(endGridY));
+        }
     }
 
-    // Direction of the laser in world coordinates.
-    const double dx = cos(reading.angle);
-    const double dy = sin(reading.angle);
-
-    // Convert sensor position to grid coordinates.
-    int x = static_cast<int>(
-        floor((sensorX - originX) / cellSize)
-    );
-
-    int y = static_cast<int>(
-        floor((sensorY - originY) / cellSize)
-    );
-
-    // For now, scans must originate inside the map.
-    if (!inBounds(x, y)) {
-        return;
-    }
-
-    // Direction of grid movement.
-    const int stepX = (dx > 0) - (dx < 0);
-    const int stepY = (dy > 0) - (dy < 0);
-
-    const double infinity =
-        numeric_limits<double>::infinity();
-
-    // How far along the ray before crossing
-    // the next vertical grid boundary?
-    double tMaxX = infinity;
-    double tDeltaX = infinity;
-
-    if (abs(dx) > 1e-12) {
-        const double boundaryX =
-            originX +
-            (stepX > 0 ? x + 1 : x) * cellSize;
-
-        tMaxX = max(
-            0.0,
-            (boundaryX - sensorX) / dx
-        );
-
+    double tMaxX = infinity, tMaxY = infinity;
+    double tDeltaX = infinity, tDeltaY = infinity;
+    if (stepX != 0) {
+        const double boundaryX = originX + (stepX > 0 ? x + 1 : x) * cellSize;
+        tMaxX = max(0.0, (boundaryX - sensorX) / dx);
         tDeltaX = cellSize / abs(dx);
     }
-
-    // How far along the ray before crossing
-    // the next horizontal grid boundary?
-    double tMaxY = infinity;
-    double tDeltaY = infinity;
-
-    if (abs(dy) > 1e-12) {
-        const double boundaryY =
-            originY +
-            (stepY > 0 ? y + 1 : y) * cellSize;
-
-        tMaxY = max(
-            0.0,
-            (boundaryY - sensorY) / dy
-        );
-
+    if (stepY != 0) {
+        const double boundaryY = originY + (stepY > 0 ? y + 1 : y) * cellSize;
+        tMaxY = max(0.0, (boundaryY - sensorY) / dy);
         tDeltaY = cellSize / abs(dy);
     }
 
-    // For a hit, determine which cell contains
-    // the detected surface point.
-    // A small backward offset avoids assigning
-    // a wall to the cell behind its near surface.
-    int hitCellX = -1;
-    int hitCellY = -1;
-
-    if (reading.hit) {
-        const double hitDistance =
-            max(0.0, reading.distance - 1e-6);
-
-        const double hitX =
-            sensorX + hitDistance * dx;
-
-        const double hitY =
-            sensorY + hitDistance * dy;
-
-        hitCellX = static_cast<int>(
-            floor((hitX - originX) / cellSize)
-        );
-
-        hitCellY = static_cast<int>(
-            floor((hitY - originY) / cellSize)
-        );
-    }
-
-    // Traverse cells intersected by the ray.
-    while (inBounds(x, y)) {
-
-        // Stop when the obstacle cell is reached.
-        if (reading.hit &&
-            x == hitCellX &&
-            y == hitCellY) {
-            cells[y * cols + x] =
-                CellState::Occupied;
-            break;
-        }
-
-        // Space before the obstacle is free.
-        cells[y * cols + x] =
-            CellState::Free;
+    // DDA visits each crossed cell once. The endpoint is excluded from free
+    // updates and receives occupied evidence once after traversal.
+    const double endpointTolerance = 1e-12 * max(1.0, reading.distance);
+    for (int steps = 0; inBounds(x, y) && steps < rows + cols + 2; ++steps) {
+        if (reading.hit && x == hitCellX && y == hitCellY) break;
+        addEvidence(x, y, freeIncrement);
 
         const double nextT = min(tMaxX, tMaxY);
+        if (!isfinite(nextT) ||
+            (reading.hit && nextT > reading.distance + endpointTolerance) ||
+            (!reading.hit && nextT >= reading.distance - endpointTolerance)) break;
 
-        if (nextT >= reading.distance) {
-            break;
+        const double cornerTolerance = 1e-12 * max(1.0, nextT);
+        if (tMaxX <= nextT + cornerTolerance) {
+            x += stepX;
+            tMaxX += tDeltaX;
         }
-
-        if (tMaxX < tMaxY) {
-            x += stepX;
-            tMaxX += tDeltaX;
-        } else if (tMaxY < tMaxX) {
+        if (tMaxY <= nextT + cornerTolerance) {
             y += stepY;
-            tMaxY += tDeltaY;
-        } else {
-            // Ray crosses a grid corner.
-            x += stepX;
-            y += stepY;
-
-            tMaxX += tDeltaX;
             tMaxY += tDeltaY;
         }
     }
+    if (reading.hit) addEvidence(hitCellX, hitCellY, occupiedIncrement);
 }

@@ -44,9 +44,23 @@ Manual driving cancels the current autonomous destination. The window title repo
 
 ## LiDAR occupancy mapping
 
-The robot starts with an **Unknown** map and records **Free** cells along each LiDAR ray and **Occupied** cells at detected surfaces. The first scan runs at startup. Further scans arrive about every 0.1 s using the robot position where each scan was taken. Drive with W/A/S/D, or choose a destination with left click, then press **M** to watch light blue-grey free space and red-orange obstacle cells appear against dark-grey unknown space. Press **C** to make every discovered cell unknown again; later scans rebuild the map. **L** changes ray visibility only.
+Each discovered cell stores an occupancy probability: the current confidence that something occupies that cell. An unobserved cell starts at **50%** because the robot has no evidence either way. The map also records whether a cell has ever been observed, so an unobserved 50% cell remains distinct from an observed cell whose evidence has balanced back to 50%.
 
-The complete-maze view shows the physical walls, moving obstacles, planning grid, route, and goal. The discovered-map view shows only the robot's occupancy map, robot, and optionally LiDAR rays; it hides the complete-map route and goal. Switching views does not change physics or navigation. A* still plans with the complete known `OccupancyGrid`, even while the discovered map is displayed. The map uses the exact simulated robot pose, so localization uncertainty is not modeled and this is not yet full SLAM. Moving-obstacle observations may remain in the discovered map until later scans update those cells.
+LiDAR updates use log-odds, `L = log(p / (1 - p))`. A detected endpoint adds occupied evidence; cells crossed before it add free-space evidence. A ray with no hit adds only free-space evidence through its reported range. Each update adds the log-odds of its observation and clamps the accumulated value to `[−4, +4]`. Repeated measurements therefore strengthen confidence while contradictory measurements can gradually reverse a classification. These probabilities are initial tuning values, not calibrated physical sensor accuracy.
+
+| Mapping parameter | Initial value |
+| --- | ---: |
+| Occupied observation probability | 0.70 |
+| Free observation probability | 0.30 |
+| Log-odds bounds | −4 to +4 |
+| Occupied classification | probability ≥ 0.65 |
+| Free classification | probability ≤ 0.35 |
+
+Observed cells between the classification thresholds remain **Unknown**. The discovered-map view draws Unknown dark grey, Free light blue-grey, and Occupied red-orange. The first LiDAR scan runs at startup; later scans arrive about every 0.1 s using their recorded robot positions. Drive with W/A/S/D, or choose a destination with left click, then press **M** to watch evidence accumulate. Press **C** to reset confidence and observation history; subsequent scans rebuild the map. **L** changes ray visibility only, so mapping continues when rays are hidden.
+
+The initial values can be tuned through `MappingParameters`. `Mapping::getOccupancyProbability(x, y)` returns 0.5 for an out-of-bounds cell, while `getCell(x, y)` returns `Unknown`.
+
+The complete-maze view shows the physical walls, moving obstacles, planning grid, route, and goal. The discovered-map view shows only the robot's occupancy map, robot, and optionally LiDAR rays; it hides the complete-map route and goal. Switching views does not change physics or navigation. A* still plans with the complete known `OccupancyGrid`, even while the discovered map is displayed. The map uses the exact simulated robot pose, so localization uncertainty is not modeled and this is not yet full SLAM. Moving obstacles may leave temporary occupied evidence; later clear observations can lower that confidence, but the map does not track moving objects explicitly.
 
 ## Navigation and safety
 
