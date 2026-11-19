@@ -8,7 +8,6 @@ using namespace std;
 
 namespace {
 
-constexpr double WAYPOINT_TOLERANCE = 0.12;
 constexpr double MAX_FORWARD_SPEED = 0.55;
 constexpr double MAX_ANGULAR_SPEED = 1.4;
 constexpr double ANGULAR_GAIN = 2.5;
@@ -36,16 +35,19 @@ void setWheelSpeeds(
 
 } // namespace
 
-void Navigator::setPath(const vector<GridCell>& newPath) {
+void Navigator::setPath(const vector<GridCell>& newPath,
+                        optional<WorldPoint> exactGoal) {
     path = newPath;
+    finalGoal = exactGoal;
     currentWaypoint = 0;
-    active = !path.empty();
+    active = !path.empty() || finalGoal.has_value();
 }
 
 void Navigator::stop() {
     active = false;
     currentWaypoint = 0;
     path.clear();
+    finalGoal.reset();
 }
 
 bool Navigator::isActive() const {
@@ -77,7 +79,7 @@ void Navigator::update(
             targetY - robot.y
         );
 
-        if (distance <= WAYPOINT_TOLERANCE) {
+        if (distance <= GOAL_TOLERANCE) {
             ++currentWaypoint;
         } else {
             break;
@@ -85,16 +87,27 @@ void Navigator::update(
     }
 
     // Stop after reaching the last waypoint.
-    if (currentWaypoint >= path.size()) {
+    if (currentWaypoint >= path.size() && !finalGoal) {
         stop();
         setWheelSpeeds(robot, 0.0, 0.0);
         return;
     }
 
-    GridCell target = path[currentWaypoint];
-
-    double targetX = grid.gridToWorldX(target.x);
-    double targetY = grid.gridToWorldY(target.y);
+    double targetX;
+    double targetY;
+    if (currentWaypoint < path.size()) {
+        const GridCell target = path[currentWaypoint];
+        targetX = grid.gridToWorldX(target.x);
+        targetY = grid.gridToWorldY(target.y);
+    } else {
+        targetX = finalGoal->x;
+        targetY = finalGoal->y;
+        if (hypot(targetX - robot.x, targetY - robot.y) <= GOAL_TOLERANCE) {
+            stop();
+            setWheelSpeeds(robot, 0.0, 0.0);
+            return;
+        }
+    }
 
     double dx = targetX - robot.x;
     double dy = targetY - robot.y;

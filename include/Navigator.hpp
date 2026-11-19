@@ -5,11 +5,15 @@
 #include "NavigationGrid.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 class Navigator {
 public:
-    void setPath(const std::vector<GridCell>& newPath);
+    static constexpr double GOAL_TOLERANCE = 0.12;
+
+    void setPath(const std::vector<GridCell>& newPath,
+                 std::optional<WorldPoint> exactGoal = std::nullopt);
     void stop();
 
     void update(Robot& robot, const NavigationGrid& grid);
@@ -19,6 +23,7 @@ public:
 
 private:
     std::vector<GridCell> path;
+    std::optional<WorldPoint> finalGoal;
     std::size_t currentWaypoint = 0;
     bool active = false;
 };

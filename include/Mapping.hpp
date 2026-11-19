@@ -32,6 +32,7 @@ public:
     );
 
     CellState getCell(int x, int y) const;
+    bool hasObservation(int x, int y) const;
     // Out-of-bounds cells have the unknown prior probability of 0.5.
     double getOccupancyProbability(int x, int y) const;
 

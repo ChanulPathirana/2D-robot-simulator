@@ -13,6 +13,7 @@ public:
 
     // Call after a fresh scan or reset. Returns true when traversability changed.
     bool rebuild();
+    std::uint64_t revision() const;
 
     bool isBlocked(int x, int y) const override;
     GridCell worldToGrid(double x, double y) const override;
@@ -27,4 +28,5 @@ private:
     double cellSize;
     std::vector<GridCell> inflationOffsets;
     std::vector<std::uint8_t> blocked;
+    std::uint64_t gridRevision = 0;
 };

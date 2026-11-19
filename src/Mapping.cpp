@@ -79,6 +79,10 @@ CellState Mapping::getCell(int x, int y) const {
     return CellState::Unknown;
 }
 
+bool Mapping::hasObservation(int x, int y) const {
+    return inBounds(x, y) && observed[static_cast<size_t>(y) * cols + x] != 0;
+}
+
 double Mapping::getOccupancyProbability(int x, int y) const {
     if (!inBounds(x, y)) return 0.5;
     const double value = logOdds[static_cast<size_t>(y) * cols + x];

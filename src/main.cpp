@@ -2,6 +2,7 @@
 #include "AStar.hpp"
 #include "Camera.hpp"
 #include "DiscoveredPlanningGrid.hpp"
+#include "FrontierExplorer.hpp"
 #include "Lidar.hpp"
 #include "Mapping.hpp"
 #include "Navigator.hpp"
@@ -66,6 +67,39 @@ const char* stateName(NavigationState state) {
     }
 
     return "Unknown";
+}
+
+const char* explorationStateName(ExplorationState state) {
+    switch (state) {
+        case ExplorationState::Idle: return "Idle";
+        case ExplorationState::SelectingFrontier: return "Selecting";
+        case ExplorationState::Navigating: return "Exploring";
+        case ExplorationState::NavigatingToGoal: return "Heading to goal";
+        case ExplorationState::Observing: return "Observing";
+        case ExplorationState::TemporarilyBlocked: return "Temporarily blocked";
+        case ExplorationState::Recovering: return "Recovering";
+        case ExplorationState::Completed: return "Observed map complete";
+        case ExplorationState::GoalReached: return "Goal reached";
+        case ExplorationState::InvalidDestination: return "Invalid destination";
+        case ExplorationState::GoalUnavailable: return "Goal unavailable";
+        case ExplorationState::Limited: return "No safe reachable frontier";
+        case ExplorationState::Blocked: return "Stopped after repeated failures";
+        case ExplorationState::Stopped: return "Stopped";
+    }
+    return "Unknown";
+}
+
+const char* goalFailureName(GoalFailureReason reason) {
+    switch (reason) {
+        case GoalFailureReason::None: return "none";
+        case GoalFailureReason::OutsideMap: return "outside map";
+        case GoalFailureReason::OccupiedAtClick: return "known occupied at click";
+        case GoalFailureReason::OccupiedAfterObservation:
+            return "destination stayed occupied";
+        case GoalFailureReason::NoSafeProgress:
+            return "no safe route or useful frontier remained";
+    }
+    return "unknown";
 }
 
 // -------------------------------------
@@ -556,7 +590,8 @@ void drawGoal(
     SDL_Renderer* renderer,
     const Camera& camera,
     const NavigationGrid& grid,
-    optional<GridCell> goal
+    optional<GridCell> goal,
+    SDL_Color color = {50, 220, 100, 255}
 ) {
     if (!goal) {
         return;
@@ -580,11 +615,28 @@ void drawGoal(
         size
     };
 
-    SDL_SetRenderDrawColor(
-        renderer, 50, 220, 100, 255
-    );
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 
     SDL_RenderFillRect(renderer, &marker);
+}
+
+void drawRequestedGoal(
+    SDL_Renderer* renderer,
+    const Camera& camera,
+    optional<WorldPoint> requested
+) {
+    if (!requested || !isfinite(requested->x) || !isfinite(requested->y)) return;
+    const ScreenPoint center = camera.toScreen(requested->x, requested->y);
+    const float radius = clamp(static_cast<float>(camera.scale() * 0.25),
+                               7.0f, 16.0f);
+    const SDL_FRect ring{center.x - radius, center.y - radius,
+                         2.0f * radius, 2.0f * radius};
+    SDL_SetRenderDrawColor(renderer, 80, 245, 125, 255);
+    SDL_RenderRect(renderer, &ring);
+    SDL_RenderLine(renderer, center.x - radius - 4.0f, center.y,
+                   center.x + radius + 4.0f, center.y);
+    SDL_RenderLine(renderer, center.x, center.y - radius - 4.0f,
+                   center.x, center.y + radius + 4.0f);
 }
 
 // -------------------------------------
@@ -768,6 +820,8 @@ int main(int argc, char* argv[]) {
     DiscoveredPlanningGrid discoveredGrid(
         discoveredMap, SimConfig::PLANNING_RADIUS
     );
+    FrontierExplorer explorer(discoveredMap, discoveredGrid, LIDAR_RANGE);
+    bool freshScanForExplorer = false;
     PlanningMode planningMode = PlanningMode::KnownMap;
 
     auto activeGrid = [&]() -> const NavigationGrid& {
@@ -858,6 +912,12 @@ int main(int argc, char* argv[]) {
     int lastZoom = -1;
     bool lastTitleDiscoveredMap = true;
     PlanningMode lastTitlePlanningMode = PlanningMode::DiscoveredMap;
+    ExplorationState lastTitleExploration = ExplorationState::Idle;
+    ExplorationState lastReportedExploration = ExplorationState::Idle;
+    ExplorationTaskMode lastTitleTask = ExplorationTaskMode::Independent;
+    int lastTitleCoverage = -1;
+    int lastTitleVisited = -1;
+    int lastTitleFailed = -1;
 
     // =================================
     // Main simulation loop
@@ -901,6 +961,10 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (event.key.scancode == SDL_SCANCODE_P) {
+                    if (explorer.state() != ExplorationState::Idle &&
+                        explorer.state() != ExplorationState::Stopped) {
+                        explorer.stop(robot, navigator, path);
+                    }
                     switchPlanningMode(planningMode, navigator, robot, path, goal);
                     state = NavigationState::Idle;
                     failedReplans = 0;
@@ -911,16 +975,37 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (event.key.scancode == SDL_SCANCODE_C) {
+                    if (explorer.state() != ExplorationState::Idle &&
+                        explorer.state() != ExplorationState::Stopped) {
+                        explorer.stop(robot, navigator, path);
+                    }
                     resetDiscoveredMap(
                         discoveredMap, discoveredGrid, planningMode,
                         navigator, robot, path, goal
                     );
+                    explorer.onMappingReset(robot, navigator, path);
                     lidarAccumulator = 0.0;
                     if (planningMode == PlanningMode::DiscoveredMap) {
                         state = NavigationState::Idle;
                         failedReplans = 0;
                         replansWithoutProgress = 0;
                         cout << "Discovered map reset; navigation cancelled.\n";
+                    }
+                }
+
+                if (event.key.scancode == SDL_SCANCODE_E) {
+                    if (explorer.isActive() &&
+                        explorer.taskMode() == ExplorationTaskMode::Independent) {
+                        explorer.stop(robot, navigator, path);
+                        cout << "Exploration stopped by user.\n";
+                    } else {
+                        cancelNavigation(navigator, robot, path, goal);
+                        planningMode = PlanningMode::DiscoveredMap;
+                        state = NavigationState::Idle;
+                        failedReplans = 0;
+                        replansWithoutProgress = 0;
+                        explorer.start(robot, navigator, path);
+                        cout << "Independent exploration started using the discovered map.\n";
                     }
                 }
 
@@ -944,16 +1029,16 @@ int main(int argc, char* argv[]) {
                 event.button.button == SDL_BUTTON_LEFT
             ) {
 
+                if (explorer.state() != ExplorationState::Idle &&
+                    explorer.state() != ExplorationState::Stopped) {
+                    explorer.stop(robot, navigator, path);
+                }
+
                 const auto [targetX, targetY] =
                     camera.screenToWorld(
                         event.button.x,
                         event.button.y
                     );
-
-                goal = activeGrid().worldToGrid(
-                    targetX,
-                    targetY
-                );
 
                 navigator.stop();
                 path.clear();
@@ -966,20 +1051,34 @@ int main(int argc, char* argv[]) {
 
                 replanTimer = 0.0;
 
-                if (planningMode == PlanningMode::KnownMap &&
-                    grid.isStaticBlocked(goal->x, goal->y)) {
-                    state = NavigationState::NoPath;
-
-                    cout
-                        << "Destination is outside "
-                        << "the navigable maze.\n";
-                } else if (planningMode == PlanningMode::DiscoveredMap &&
-                           discoveredGrid.isBlocked(goal->x, goal->y)) {
-                    state = NavigationState::NoPath;
-                    cout << "Destination is unknown, occupied, or too close "
-                         << "to unsafe space in the discovered map.\n";
+                if (planningMode == PlanningMode::DiscoveredMap) {
+                    goal.reset();
+                    state = NavigationState::Idle;
+                    const GoalRequestResult result = explorer.startGoal(
+                        {targetX, targetY}, robot, navigator, path
+                    );
+                    switch (result) {
+                        case GoalRequestResult::Direct:
+                            cout << "Safe discovered-map route to requested goal found.\n";
+                            break;
+                        case GoalRequestResult::Exploring:
+                            cout << "Requested goal retained; exploring for a safe route.\n";
+                            break;
+                        case GoalRequestResult::Occupied:
+                            cout << "Requested destination is known occupied; navigation rejected.\n";
+                            break;
+                        case GoalRequestResult::OutsideMap:
+                            cout << "Requested destination is outside the map; navigation rejected.\n";
+                            break;
+                    }
                 } else {
-                    planToGoal(true);
+                    goal = grid.worldToGrid(targetX, targetY);
+                    if (grid.isStaticBlocked(goal->x, goal->y)) {
+                        state = NavigationState::NoPath;
+                        cout << "Destination is outside the navigable maze.\n";
+                    } else {
+                        planToGoal(true);
+                    }
                 }
             }
         }
@@ -1005,6 +1104,9 @@ int main(int argc, char* argv[]) {
         // =============================
 
         while (accumulator >= SimConfig::DT) {
+
+            const bool freshScan = freshScanForExplorer;
+            freshScanForExplorer = false;
 
             // Update moving obstacles
             world.update(
@@ -1040,6 +1142,13 @@ int main(int argc, char* argv[]) {
 
             if (manual) {
 
+                if (explorer.state() != ExplorationState::Idle &&
+                    explorer.state() != ExplorationState::Stopped) {
+                    explorer.stop(robot, navigator, path);
+                    state = NavigationState::Idle;
+                    cout << "Exploration cancelled by manual control.\n";
+                }
+
                 if (goal) {
                     navigator.stop();
                     path.clear();
@@ -1049,6 +1158,13 @@ int main(int argc, char* argv[]) {
                 }
 
                 handleInput(robot, keys);
+
+            } else if (explorer.isActive()) {
+
+                explorer.update(
+                    SimConfig::DT, freshScan, robot, navigator, path
+                );
+                state = NavigationState::Idle;
 
             } else {
 
@@ -1249,6 +1365,8 @@ int main(int argc, char* argv[]) {
                     lidar.getReadings(), lidarScanX, lidarScanY
                 );
                 discoveredGrid.rebuild();
+                if (!explorer.isActive()) explorer.onMapScan();
+                freshScanForExplorer = true;
 
                 lidarAccumulator -= LIDAR_INTERVAL;
             }
@@ -1262,23 +1380,60 @@ int main(int argc, char* argv[]) {
 
         const int zoom =
             static_cast<int>(round(camera.scale()));
+        const auto& explorationStats = explorer.statistics();
+        const int coverage = static_cast<int>(round(explorationStats.observedPercent));
+
+        if (explorer.state() != lastReportedExploration) {
+            if (explorer.state() != ExplorationState::Idle) {
+                cout << "Exploration: " << explorationStateName(explorer.state())
+                     << " | observed " << explorationStats.observedPercent << "%"
+                     << " | unknown/free/occupied "
+                     << explorationStats.unknown << '/' << explorationStats.free
+                     << '/' << explorationStats.occupied
+                     << " | frontiers " << explorationStats.frontierRegions
+                     << " | reachable viewpoints " << explorationStats.reachableCandidates
+                     << " | visited/failed " << explorationStats.visitedViewpoints
+                     << '/' << explorationStats.failedViewpoints
+                     << " | travel " << explorationStats.distanceTravelled << " m";
+                if (explorer.goalFailureReason() != GoalFailureReason::None) {
+                    cout << " | reason "
+                         << goalFailureName(explorer.goalFailureReason());
+                }
+                cout << '\n';
+            }
+            lastReportedExploration = explorer.state();
+        }
 
         if (
             state != lastTitleState ||
             zoom != lastZoom ||
             showDiscoveredMap != lastTitleDiscoveredMap ||
-            planningMode != lastTitlePlanningMode
+            planningMode != lastTitlePlanningMode ||
+            explorer.state() != lastTitleExploration ||
+            explorer.taskMode() != lastTitleTask ||
+            coverage != lastTitleCoverage ||
+            explorationStats.visitedViewpoints != lastTitleVisited ||
+            explorationStats.failedViewpoints != lastTitleFailed
         ) {
 
             const string title =
                 string("2D Robot Simulator | ") +
-                stateName(state) +
+                (explorer.state() == ExplorationState::Idle ||
+                 explorer.state() == ExplorationState::Stopped
+                    ? stateName(state)
+                    : explorationStateName(explorer.state())) +
                 " | Zoom " +
                 to_string(zoom) +
                 " px/m | " +
                 (showDiscoveredMap ? "Discovered view" : "Complete view") +
                 " | Plan: " +
-                (planningMode == PlanningMode::KnownMap ? "Known" : "Discovered");
+                (planningMode == PlanningMode::KnownMap ? "Known" : "Discovered") +
+                " | Task: " +
+                (explorer.taskMode() == ExplorationTaskMode::GoalDirected
+                    ? "Goal" : (explorer.isActive() ? "Explore" : "None")) +
+                " | Map " + to_string(coverage) + "% V" +
+                to_string(explorationStats.visitedViewpoints) + " F" +
+                to_string(explorationStats.failedViewpoints);
 
             SDL_SetWindowTitle(
                 window,
@@ -1289,6 +1444,11 @@ int main(int argc, char* argv[]) {
             lastZoom = zoom;
             lastTitleDiscoveredMap = showDiscoveredMap;
             lastTitlePlanningMode = planningMode;
+            lastTitleExploration = explorer.state();
+            lastTitleTask = explorer.taskMode();
+            lastTitleCoverage = coverage;
+            lastTitleVisited = explorationStats.visitedViewpoints;
+            lastTitleFailed = explorationStats.failedViewpoints;
         }
 
         // =============================
@@ -1305,7 +1465,16 @@ int main(int argc, char* argv[]) {
             drawDiscoveredMap(renderer, camera, discoveredMap);
             if (planningMode == PlanningMode::DiscoveredMap) {
                 drawPath(renderer, camera, activeGrid(), path);
-                drawGoal(renderer, camera, activeGrid(), goal);
+                if (explorer.isActive() && explorer.goal()) {
+                    drawGoal(renderer, camera, activeGrid(), explorer.goal(),
+                             {195, 105, 245, 255});
+                } else {
+                    drawGoal(renderer, camera, activeGrid(), goal);
+                }
+                if (explorer.state() != ExplorationState::InvalidDestination) {
+                    drawRequestedGoal(renderer, camera,
+                                      explorer.requestedDestination());
+                }
             }
         } else {
             drawFloor(renderer, camera);
@@ -1334,8 +1503,15 @@ int main(int argc, char* argv[]) {
                 renderer,
                 camera,
                 activeGrid(),
-                goal
+                explorer.isActive() ? explorer.goal() : goal,
+                explorer.isActive() && explorer.goal()
+                    ? SDL_Color{195, 105, 245, 255}
+                    : SDL_Color{50, 220, 100, 255}
             );
+            if (explorer.state() != ExplorationState::InvalidDestination) {
+                drawRequestedGoal(renderer, camera,
+                                  explorer.requestedDestination());
+            }
         }
 
         // NEW: Display 360-degree LiDAR

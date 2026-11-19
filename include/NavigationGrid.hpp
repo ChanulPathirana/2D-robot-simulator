@@ -5,6 +5,11 @@ struct GridCell {
     int y;
 };
 
+struct WorldPoint {
+    double x;
+    double y;
+};
+
 class NavigationGrid {
 public:
     virtual ~NavigationGrid() = default;

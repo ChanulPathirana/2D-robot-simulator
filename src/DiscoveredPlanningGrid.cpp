@@ -64,8 +64,11 @@ bool DiscoveredPlanningGrid::rebuild() {
             blocked[index] = value;
         }
     }
+    if (changed) ++gridRevision;
     return changed;
 }
+
+std::uint64_t DiscoveredPlanningGrid::revision() const { return gridRevision; }
 
 bool DiscoveredPlanningGrid::isBlocked(int x, int y) const {
     if (x < 0 || y < 0 || x >= map.getCols() || y >= map.getRows()) return true;

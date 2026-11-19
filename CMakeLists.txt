@@ -22,6 +22,7 @@ add_executable(robot_simulator
     src/Lidar.cpp
     src/Mapping.cpp
     src/DiscoveredPlanningGrid.cpp
+    src/FrontierExplorer.cpp
     
 ) 
 
@@ -59,4 +60,34 @@ if(BUILD_TESTING)
     )
     target_include_directories(planning_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME planning_tests COMMAND planning_tests)
+
+    add_executable(frontier_tests
+        tests/FrontierTests.cpp
+        src/AStar.cpp
+        src/DiscoveredPlanningGrid.cpp
+        src/FrontierExplorer.cpp
+        src/Lidar.cpp
+        src/Mapping.cpp
+        src/Navigator.cpp
+        src/Robot.cpp
+        src/Sensor.cpp
+        src/World.cpp
+    )
+    target_include_directories(frontier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME frontier_tests COMMAND frontier_tests)
+
+    add_executable(goal_exploration_tests
+        tests/GoalExplorationTests.cpp
+        src/AStar.cpp
+        src/DiscoveredPlanningGrid.cpp
+        src/FrontierExplorer.cpp
+        src/Lidar.cpp
+        src/Mapping.cpp
+        src/Navigator.cpp
+        src/Robot.cpp
+        src/Sensor.cpp
+        src/World.cpp
+    )
+    target_include_directories(goal_exploration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME goal_exploration_tests COMMAND goal_exploration_tests)
 endif()
