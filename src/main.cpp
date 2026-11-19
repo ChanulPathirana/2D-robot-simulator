@@ -4,6 +4,7 @@
 #include "Sensor.hpp"
 #include "OccupancyGrid.hpp"
 #include "AStar.hpp"
+#include "Navigator.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -41,34 +42,26 @@ struct Point {
 };
 
 // -------------------------------------
-// World coordinates -> screen pixels
+// Coordinate conversions
 // -------------------------------------
 
 Point toScreen(double x, double y) {
     return {
-        static_cast<float>(
-            WIDTH / 2.0 + x * SCALE
-        ),
-        static_cast<float>(
-            HEIGHT / 2.0 - y * SCALE
-        )
+        static_cast<float>(WIDTH / 2.0 + x * SCALE),
+        static_cast<float>(HEIGHT / 2.0 - y * SCALE)
     };
 }
 
-// -------------------------------------
-// Screen pixels -> world coordinates
-// -------------------------------------
-
-double screenToWorldX(double screenX) {
-    return (screenX - WIDTH / 2.0) / SCALE;
+double screenToWorldX(double x) {
+    return (x - WIDTH / 2.0) / SCALE;
 }
 
-double screenToWorldY(double screenY) {
-    return (HEIGHT / 2.0 - screenY) / SCALE;
+double screenToWorldY(double y) {
+    return (HEIGHT / 2.0 - y) / SCALE;
 }
 
 // -------------------------------------
-// Draw occupancy grid
+// Draw blocked occupancy grid cells
 // -------------------------------------
 
 void drawGrid(
@@ -76,8 +69,7 @@ void drawGrid(
     const OccupancyGrid& grid
 ) {
     SDL_SetRenderDrawBlendMode(
-        renderer,
-        SDL_BLENDMODE_BLEND
+        renderer, SDL_BLENDMODE_BLEND
     );
 
     for (int y = 0; y < grid.getRows(); ++y) {
@@ -98,17 +90,12 @@ void drawGrid(
             SDL_FRect rect = {
                 topLeft.x,
                 topLeft.y,
-                static_cast<float>(
-                    GRID_CELL_SIZE * SCALE
-                ),
-                static_cast<float>(
-                    GRID_CELL_SIZE * SCALE
-                )
+                static_cast<float>(GRID_CELL_SIZE * SCALE),
+                static_cast<float>(GRID_CELL_SIZE * SCALE)
             };
 
             SDL_SetRenderDrawColor(
-                renderer,
-                255, 170, 40, 100
+                renderer, 255, 170, 40, 100
             );
 
             SDL_RenderFillRect(renderer, &rect);
@@ -116,8 +103,7 @@ void drawGrid(
     }
 
     SDL_SetRenderDrawBlendMode(
-        renderer,
-        SDL_BLENDMODE_NONE
+        renderer, SDL_BLENDMODE_NONE
     );
 }
 
@@ -130,12 +116,10 @@ void drawWorld(
     const World& world
 ) {
     SDL_SetRenderDrawColor(
-        renderer,
-        200, 80, 80, 255
+        renderer, 200, 80, 80, 255
     );
 
     for (const auto& obstacle : world.obstacles) {
-
         Point topLeft = toScreen(
             obstacle.x,
             obstacle.y + obstacle.height
@@ -144,12 +128,8 @@ void drawWorld(
         SDL_FRect rect = {
             topLeft.x,
             topLeft.y,
-            static_cast<float>(
-                obstacle.width * SCALE
-            ),
-            static_cast<float>(
-                obstacle.height * SCALE
-            )
+            static_cast<float>(obstacle.width * SCALE),
+            static_cast<float>(obstacle.height * SCALE)
         };
 
         SDL_RenderFillRect(renderer, &rect);
@@ -179,8 +159,7 @@ void drawRobot(
     Point rearRight = transform(-0.25, -0.23);
 
     SDL_SetRenderDrawColor(
-        renderer,
-        50, 130, 255, 255
+        renderer, 50, 130, 255, 255
     );
 
     SDL_RenderLine(
@@ -206,8 +185,7 @@ void drawRobot(
     Point heading = transform(0.55, 0.0);
 
     SDL_SetRenderDrawColor(
-        renderer,
-        255, 220, 50, 255
+        renderer, 255, 220, 50, 255
     );
 
     SDL_RenderLine(
@@ -238,7 +216,6 @@ void drawSensors(
     Point start = toScreen(robot.x, robot.y);
 
     for (double offset : offsets) {
-
         double angle =
             robot.theta + offset * DEG_TO_RAD;
 
@@ -257,13 +234,11 @@ void drawSensors(
 
         if (reading.hit) {
             SDL_SetRenderDrawColor(
-                renderer,
-                255, 90, 90, 255
+                renderer, 255, 90, 90, 255
             );
         } else {
             SDL_SetRenderDrawColor(
-                renderer,
-                50, 220, 100, 255
+                renderer, 50, 220, 100, 255
             );
         }
 
@@ -289,12 +264,10 @@ void drawPath(
     }
 
     SDL_SetRenderDrawColor(
-        renderer,
-        50, 160, 255, 255
+        renderer, 50, 160, 255, 255
     );
 
     for (size_t i = 1; i < path.size(); ++i) {
-
         Point a = toScreen(
             grid.gridToWorldX(path[i - 1].x),
             grid.gridToWorldY(path[i - 1].y)
@@ -314,7 +287,7 @@ void drawPath(
 }
 
 // -------------------------------------
-// Draw selected destination
+// Draw destination marker
 // -------------------------------------
 
 void drawGoal(
@@ -333,25 +306,24 @@ void drawGoal(
         grid.gridToWorldY(goal.y)
     );
 
-    constexpr float markerSize = 10.0f;
+    constexpr float MARKER_SIZE = 10.0f;
 
     SDL_FRect marker = {
-        center.x - markerSize / 2.0f,
-        center.y - markerSize / 2.0f,
-        markerSize,
-        markerSize
+        center.x - MARKER_SIZE / 2.0f,
+        center.y - MARKER_SIZE / 2.0f,
+        MARKER_SIZE,
+        MARKER_SIZE
     };
 
     SDL_SetRenderDrawColor(
-        renderer,
-        50, 220, 100, 255
+        renderer, 50, 220, 100, 255
     );
 
     SDL_RenderFillRect(renderer, &marker);
 }
 
 // -------------------------------------
-// Keyboard controls
+// Manual keyboard controls
 // -------------------------------------
 
 void handleInput(
@@ -406,11 +378,11 @@ void applyEmergencyStop(
     );
 
     if (clearance <= SAFETY_CLEARANCE) {
-
         double omega =
             (robot.rightSpeed - robot.leftSpeed)
             / robot.wheelBase;
 
+        // Stop forward motion but allow turning.
         robot.leftSpeed =
             -omega * robot.wheelBase / 2.0;
 
@@ -425,7 +397,7 @@ void applyEmergencyStop(
 
 int main(int argc, char* argv[]) {
 
-    // Initialize SDL3
+    // 1. Initialize SDL3
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         cerr << "SDL initialization failed: "
              << SDL_GetError() << '\n';
@@ -456,13 +428,12 @@ int main(int argc, char* argv[]) {
     }
 
     // ---------------------------------
-    // Create robot and world
+    // Create simulation components
     // ---------------------------------
 
     Robot robot;
     World world;
 
-    // Build known-map occupancy grid
     OccupancyGrid grid(
         world,
         WIDTH / SCALE,
@@ -471,8 +442,11 @@ int main(int argc, char* argv[]) {
         ROBOT_RADIUS
     );
 
-    // Calculated A* path
+    // Current calculated route
     vector<GridCell> path;
+
+    // NEW: Autonomous waypoint controller
+    Navigator navigator;
 
     bool running = true;
 
@@ -480,7 +454,7 @@ int main(int argc, char* argv[]) {
     double accumulator = 0.0;
 
     // ---------------------------------
-    // Main loop
+    // Main simulation loop
     // ---------------------------------
 
     while (running) {
@@ -488,12 +462,12 @@ int main(int argc, char* argv[]) {
         SDL_Event event;
 
         // -----------------------------
-        // Handle events
+        // Handle SDL events
         // -----------------------------
 
         while (SDL_PollEvent(&event)) {
 
-            // Close window
+            // Close the window
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             }
@@ -506,45 +480,44 @@ int main(int argc, char* argv[]) {
                 running = false;
             }
 
-            // Left mouse click:
-            // Calculate a new A* path.
+            // Left-click to choose destination
             if (
                 event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT
             ) {
-
-                // Convert clicked pixel to world metres
+                // Mouse pixels -> world metres
                 double targetX =
                     screenToWorldX(event.button.x);
 
                 double targetY =
                     screenToWorldY(event.button.y);
 
-                // Current robot grid cell
                 GridCell start = grid.worldToGrid(
                     robot.x,
                     robot.y
                 );
 
-                // Destination grid cell
                 GridCell goal = grid.worldToGrid(
                     targetX,
                     targetY
                 );
 
-                // Calculate new path
+                // Calculate path using A*
                 path = AStar::findPath(
                     grid,
                     start,
                     goal
                 );
 
+                // NEW: Give path to autonomous controller
+                navigator.setPath(path);
+
                 if (path.empty()) {
                     cout << "No valid path found.\n";
                 } else {
                     cout << "Path found: "
                          << path.size()
-                         << " cells\n";
+                         << " cells. Navigating...\n";
                 }
             }
         }
@@ -553,15 +526,13 @@ int main(int argc, char* argv[]) {
             SDL_GetKeyboardState(nullptr);
 
         // -----------------------------
-        // Calculate elapsed time
+        // Time calculation
         // -----------------------------
 
         Uint64 now = SDL_GetTicksNS();
 
         double elapsed =
-            static_cast<double>(
-                now - previous
-            ) / 1e9;
+            static_cast<double>(now - previous) / 1e9;
 
         previous = now;
 
@@ -574,21 +545,47 @@ int main(int argc, char* argv[]) {
 
         while (accumulator >= DT) {
 
-            // Manual keyboard movement
-            handleInput(robot, keys);
+            bool manualInput =
+                keys[SDL_SCANCODE_W] ||
+                keys[SDL_SCANCODE_A] ||
+                keys[SDL_SCANCODE_S] ||
+                keys[SDL_SCANCODE_D];
 
-            // Emergency stopping
+            if (manualInput) {
+
+                // Manual input overrides navigation.
+                if (navigator.isActive()) {
+                    navigator.stop();
+                    path.clear();
+                }
+
+                handleInput(robot, keys);
+
+            } else if (navigator.isActive()) {
+
+                // NEW: Automatically calculate
+                // left and right wheel speeds.
+                navigator.update(robot, grid);
+
+            } else {
+
+                // Robot stays stationary.
+                robot.leftSpeed = 0.0;
+                robot.rightSpeed = 0.0;
+            }
+
+            // Existing footprint-aware safety
             applyEmergencyStop(robot, world);
 
-            // Save previous robot pose
+            // Save robot pose before movement
             double oldX = robot.x;
             double oldY = robot.y;
             double oldTheta = robot.theta;
 
-            // Differential-drive physics
+            // Differential-drive physics update
             robot.update(DT);
 
-            // Prevent obstacle penetration
+            // Roll back if movement caused collision
             if (world.collides(
                 robot.x,
                 robot.y,
@@ -603,36 +600,34 @@ int main(int argc, char* argv[]) {
         }
 
         // -----------------------------
-        // Rendering
+        // Render simulation
         // -----------------------------
 
         SDL_SetRenderDrawColor(
-            renderer,
-            20, 22, 32, 255
+            renderer, 20, 22, 32, 255
         );
 
         SDL_RenderClear(renderer);
 
-        // Orange forbidden grid cells
+        // Orange blocked regions
         drawGrid(renderer, grid);
 
         // Red physical obstacles
         drawWorld(renderer, world);
 
-        // Blue A* planned path
+        // Blue A* path
         drawPath(renderer, grid, path);
 
         // Green destination marker
         drawGoal(renderer, grid, path);
 
-        // Distance sensor rays
+        // Red/green sensor rays
         drawSensors(renderer, robot, world);
 
-        // Blue robot
+        // Blue robot triangle
         drawRobot(renderer, robot);
 
         SDL_RenderPresent(renderer);
-
         SDL_Delay(1);
     }
 

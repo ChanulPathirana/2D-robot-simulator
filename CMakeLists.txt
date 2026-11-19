@@ -17,6 +17,7 @@ add_executable(robot_simulator
     src/Sensor.cpp
     src/OccupancyGrid.cpp
     src/AStar.cpp
+    src/Navigator.cpp
     
     
 ) 
