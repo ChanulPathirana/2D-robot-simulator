@@ -5,6 +5,7 @@
 #include "NavigationGrid.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -20,10 +21,13 @@ public:
 
     bool isActive() const;
     std::size_t waypointIndex() const;
+    const std::vector<GridCell>& route() const;
+    std::uint64_t routeRevision() const;
 
 private:
     std::vector<GridCell> path;
     std::optional<WorldPoint> finalGoal;
     std::size_t currentWaypoint = 0;
     bool active = false;
+    std::uint64_t revision = 0;
 };

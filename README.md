@@ -43,7 +43,7 @@ cmake --build build -j2
 | L | Show or hide LiDAR rays; scanning and mapping continue |
 | Esc | Quit |
 
-Manual driving cancels the current autonomous destination. The window title reports navigation state, planning mode, and zoom. A blue line shows the current A* path. A green marker identifies an ordinary known-map goal; during goal-directed exploration, a green cross marks the exact requested point and a purple square marks the current temporary frontier viewpoint. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas. **M** only changes the view; **P** changes the planner and cancels the previous route.
+Manual driving cancels the current autonomous destination. The window title reports navigation state, planning mode, and zoom. A blue line shows the route currently owned by the Navigator. A green marker identifies an ordinary known-map goal; during goal-directed exploration, a green cross marks the exact requested point and a purple square marks the current temporary frontier viewpoint. The blue line ends at the purple square while the robot is exploring; it is not extended to the green requested destination. Permanent walls are slate, moving obstacles are orange, and translucent orange marks blocked or unsafe grid areas. **M** only changes the view; **P** changes the planner and cancels the previous route.
 
 ## LiDAR occupancy mapping
 
@@ -70,6 +70,8 @@ The complete-maze view shows the physical walls, moving obstacles, planning grid
 Press **P** for Discovered Map planning, then left-click a destination. A* uses the same eight-direction search as Known Map mode, but its grid is built only from LiDAR evidence. Unknown and Occupied cells are blocked. The planner also requires 0.7 m of Euclidean clearance around each candidate cell from unsafe cells and the world boundary. This includes the 0.4 m robot radius and 0.3 m safety margin. The first scan makes a small safe region around the robot available; driving or navigating reveals more space.
 
 If the clicked cell is safely reachable through known Free space, the robot follows a direct discovered-map route. An Unknown destination, or a known Free destination without a safe connecting route, starts goal-directed exploration. A destination known Occupied at click time or outside the map is rejected with a reason; the robot never silently chooses a nearby substitute. If a scan blocks a direct route, the robot stops, retries safely, and can return to frontier exploration. **C** clears the discovered map and cancels a route or goal task that depended on it. Known Map navigation continues when **C** is pressed, because it uses the separate complete-map grid. Switching planning modes with **P** cancels the current route and destination.
+
+Each accepted route is logged once with its planning mode, task, active target type (`KnownMapGoal`, `DiscoveredMapGoal`, or `FrontierViewpoint`), requested point, temporary viewpoint, robot position, waypoint count, length, and validation result. Discovered A* receives only `DiscoveredPlanningGrid`; this grid blocks Unknown and Occupied cells and inflates them for the robot footprint and safety margin. A new scan rechecks the active route before the controller continues. The complete-world obstacle list is used for physical collision checks and Known Map planning, never for selecting a discovered-map route.
 
 Discovered-map planning uses current observations only. It does not predict moving-obstacle trajectories, and a temporary obstacle can leave map evidence until later clear scans reduce it.
 
@@ -118,3 +120,17 @@ The static occupancy map is created once. During A*, cells overlapping the **cur
 - `main.cpp`: SDL input, fixed-step orchestration and rendering.
 
 The fixed simulation timestep is 1/60 s. The rendering camera does not change world-space physics or planning coordinates.
+
+## Milestone 15 headless evaluation
+
+Build with the command above, then run:
+
+```bash
+ctest --test-dir build --output-on-failure
+mkdir -p results
+./build/simulation_evaluation results/milestone15_results.csv
+```
+
+The evaluation uses the production A*, mapping, discovered grid, explorer, Navigator, world, LiDAR, and the same emergency-stop and swept-collision motion step as the SDL loop. It uses fixed 1/60 s updates, 72 LiDAR rays, 0.1 s scans, the 160 × 120 map, bounded scenarios, and deterministic moving obstacles. The CSV contains one row per scenario, including exact starting pose and goal, outcome, simulated time, travel, final goal error, coverage, replans, frontier visits, collision rollbacks, failure reason, timing measurements, and a 10-second coverage timeline. Run the command again to reproduce a failure; inspect the scenario row and the event-driven route logs for its active target and validation result.
+
+`Reached` requires the robot's final physical position to be within 0.12 m of the requested point. `NoSafeRoute` describes an invalid or unreachable destination. `Incomplete` means bounded recovery ended before arrival; `TimedOut` means the scenario duration ended while the task was still active. Observed coverage counts cells with LiDAR evidence, including observed cells still classified Unknown. It is not the fraction of the maze physically visited. Collision rollbacks count rejected motion substeps; zero rollbacks do not imply no obstacle was encountered because the emergency stop can prevent contact first. Replans count accepted route replacements after the first route. See `results/milestone15_report.md` for measured results and remaining limitations.

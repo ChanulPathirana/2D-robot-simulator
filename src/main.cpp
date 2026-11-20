@@ -10,8 +10,10 @@
 #include "PlanningMode.hpp"
 #include "Robot.hpp"
 #include "RouteValidation.hpp"
+#include "RouteDiagnostics.hpp"
 #include "Sensor.hpp"
 #include "SimulationConfig.hpp"
+#include "SimulationStep.hpp"
 #include "World.hpp"
 
 #include <SDL3/SDL.h>
@@ -675,40 +677,6 @@ void handleInput(
 // Emergency stopping
 // -------------------------------------
 
-void applyEmergencyStop(
-    Robot& robot,
-    const World& world
-) {
-    const double forward =
-        (robot.leftSpeed + robot.rightSpeed) * 0.5;
-
-    if (forward <= 0.0) {
-        return;
-    }
-
-    const double clearance = world.forwardClearance(
-        robot.x,
-        robot.y,
-        robot.theta,
-        SimConfig::ROBOT_RADIUS,
-        SimConfig::SENSOR_RANGE
-    );
-
-    if (clearance <= SimConfig::SAFETY_CLEARANCE) {
-
-        const double omega =
-            (robot.rightSpeed - robot.leftSpeed)
-            / robot.wheelBase;
-
-        // Stop translation but preserve rotation
-        robot.leftSpeed =
-            -omega * robot.wheelBase * 0.5;
-
-        robot.rightSpeed =
-            omega * robot.wheelBase * 0.5;
-    }
-}
-
 } // namespace
 
 // =====================================
@@ -775,6 +743,7 @@ int main(int argc, char* argv[]) {
 
     vector<GridCell> path;
     optional<GridCell> goal;
+    optional<WorldPoint> requestedKnownGoal;
 
     NavigationState state = NavigationState::Idle;
 
@@ -869,9 +838,10 @@ int main(int argc, char* argv[]) {
 
         path = AStar::findPath(planningGrid, start, *goal);
 
-        if (path.empty()) {
+        if (!validateRoute(planningGrid, path)) {
 
             navigator.stop();
+            path.clear();
 
             if ((planningMode == PlanningMode::DiscoveredMap && initialRequest) ||
                 ++failedReplans >= MAX_FAILED_REPLANS) {
@@ -887,7 +857,14 @@ int main(int argc, char* argv[]) {
 
         } else {
 
-            navigator.setPath(path);
+            navigator.setPath(path, requestedKnownGoal);
+            logAcceptedRoute(planningMode == PlanningMode::KnownMap
+                                 ? "Known Map" : "Discovered Map",
+                             "ManualDestination",
+                             planningMode == PlanningMode::KnownMap
+                                 ? "KnownMapGoal" : "DiscoveredMapGoal",
+                             requestedKnownGoal,
+                             nullopt, robot, planningGrid, path);
 
             state = NavigationState::Navigating;
 
@@ -966,6 +943,7 @@ int main(int argc, char* argv[]) {
                         explorer.stop(robot, navigator, path);
                     }
                     switchPlanningMode(planningMode, navigator, robot, path, goal);
+                    requestedKnownGoal.reset();
                     state = NavigationState::Idle;
                     failedReplans = 0;
                     replansWithoutProgress = 0;
@@ -1000,6 +978,7 @@ int main(int argc, char* argv[]) {
                         cout << "Exploration stopped by user.\n";
                     } else {
                         cancelNavigation(navigator, robot, path, goal);
+                        requestedKnownGoal.reset();
                         planningMode = PlanningMode::DiscoveredMap;
                         state = NavigationState::Idle;
                         failedReplans = 0;
@@ -1053,6 +1032,7 @@ int main(int argc, char* argv[]) {
 
                 if (planningMode == PlanningMode::DiscoveredMap) {
                     goal.reset();
+                    requestedKnownGoal.reset();
                     state = NavigationState::Idle;
                     const GoalRequestResult result = explorer.startGoal(
                         {targetX, targetY}, robot, navigator, path
@@ -1072,6 +1052,7 @@ int main(int argc, char* argv[]) {
                             break;
                     }
                 } else {
+                    requestedKnownGoal = WorldPoint{targetX, targetY};
                     goal = grid.worldToGrid(targetX, targetY);
                     if (grid.isStaticBlocked(goal->x, goal->y)) {
                         state = NavigationState::NoPath;
@@ -1153,6 +1134,7 @@ int main(int argc, char* argv[]) {
                     navigator.stop();
                     path.clear();
                     goal.reset();
+                    requestedKnownGoal.reset();
 
                     state = NavigationState::Idle;
                 }
@@ -1219,63 +1201,8 @@ int main(int argc, char* argv[]) {
             // Safety and robot physics
             // -------------------------
 
-            applyEmergencyStop(robot, world);
-
             const Robot oldPose = robot;
-
-            const double forward =
-                (robot.leftSpeed + robot.rightSpeed) * 0.5;
-
-            const int steps = max(
-                1,
-                static_cast<int>(
-                    ceil(
-                        abs(forward) *
-                        SimConfig::DT / 0.10
-                    )
-                )
-            );
-
-            bool collided = false;
-
-            for (int i = 0; i < steps; ++i) {
-
-                Robot trial = robot;
-                trial.update(SimConfig::DT / steps);
-
-                const double dx = trial.x - robot.x;
-                const double dy = trial.y - robot.y;
-
-                const double distance = hypot(dx, dy);
-
-                const bool sweptHit =
-                    distance > 0.0 &&
-                    world.forwardClearance(
-                        robot.x,
-                        robot.y,
-                        atan2(dy, dx),
-                        SimConfig::ROBOT_RADIUS,
-                        distance
-                    ) < distance - 1e-9;
-
-                if (
-                    sweptHit ||
-                    world.collides(
-                        trial.x,
-                        trial.y,
-                        SimConfig::ROBOT_RADIUS
-                    )
-                ) {
-                    collided = true;
-                    break;
-                }
-
-                robot = trial;
-            }
-
-            if (collided) {
-                robot = oldPose;
-            }
+            advanceRobotSafely(robot, world, SimConfig::DT);
 
             // -------------------------
             // Navigation stall detection
@@ -1464,7 +1391,8 @@ int main(int argc, char* argv[]) {
         if (showDiscoveredMap) {
             drawDiscoveredMap(renderer, camera, discoveredMap);
             if (planningMode == PlanningMode::DiscoveredMap) {
-                drawPath(renderer, camera, activeGrid(), path);
+                if (navigator.isActive())
+                    drawPath(renderer, camera, activeGrid(), navigator.route());
                 if (explorer.isActive() && explorer.goal()) {
                     drawGoal(renderer, camera, activeGrid(), explorer.goal(),
                              {195, 105, 245, 255});
@@ -1492,22 +1420,20 @@ int main(int argc, char* argv[]) {
                 world
             );
 
-            drawPath(
-                renderer,
-                camera,
-                activeGrid(),
-                path
-            );
+            if (navigator.isActive())
+                drawPath(renderer, camera, activeGrid(), navigator.route());
 
             drawGoal(
                 renderer,
                 camera,
                 activeGrid(),
-                explorer.isActive() ? explorer.goal() : goal,
+                explorer.isActive() ? explorer.goal() : nullopt,
                 explorer.isActive() && explorer.goal()
                     ? SDL_Color{195, 105, 245, 255}
                     : SDL_Color{50, 220, 100, 255}
             );
+            if (planningMode == PlanningMode::KnownMap)
+                drawRequestedGoal(renderer, camera, requestedKnownGoal);
             if (explorer.state() != ExplorationState::InvalidDestination) {
                 drawRequestedGoal(renderer, camera,
                                   explorer.requestedDestination());

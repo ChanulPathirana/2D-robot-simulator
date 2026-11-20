@@ -53,3 +53,4 @@ void Lidar::scan(
 const vector<LidarReading>& Lidar::getReadings() const {
     return readings;
 }
+

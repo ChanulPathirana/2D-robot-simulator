@@ -38,6 +38,7 @@ void setWheelSpeeds(
 void Navigator::setPath(const vector<GridCell>& newPath,
                         optional<WorldPoint> exactGoal) {
     path = newPath;
+    ++revision;
     finalGoal = exactGoal;
     currentWaypoint = 0;
     active = !path.empty() || finalGoal.has_value();
@@ -57,6 +58,9 @@ bool Navigator::isActive() const {
 size_t Navigator::waypointIndex() const {
     return currentWaypoint;
 }
+
+const vector<GridCell>& Navigator::route() const { return path; }
+std::uint64_t Navigator::routeRevision() const { return revision; }
 
 void Navigator::update(
     Robot& robot,

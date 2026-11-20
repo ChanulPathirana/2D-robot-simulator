@@ -4,7 +4,9 @@
 #include "OccupancyGrid.hpp"
 #include "PlanningMode.hpp"
 #include "RouteValidation.hpp"
+#include "RouteDiagnostics.hpp"
 #include "SimulationConfig.hpp"
+#include "SimulationStep.hpp"
 
 #include <iostream>
 #include <optional>
@@ -74,6 +76,8 @@ void testRouteInvalidationAndController() {
 
     Navigator navigator;
     navigator.setPath(path);
+    require(navigator.route() == path && validateRoute(grid, navigator.route()),
+            "displayed Navigator route differs from accepted safe route");
     Robot robot;
     robot.x = 2.5;
     robot.y = 4.5;
@@ -191,6 +195,39 @@ void testInitialRealScan() {
     require(nearbyRoute, "first real LiDAR scan has no nearby safe route");
 }
 
+void testExactRequestedArrival() {
+    Mapping map = freeMap();
+    DiscoveredPlanningGrid grid(map, 0.7);
+    Robot robot;
+    robot.x = 2.5; robot.y = 4.5; robot.theta = 0.0;
+    const WorldPoint requested{6.2, 4.7};
+    const auto route = AStar::findPath(grid, {2, 4}, {6, 4});
+    Navigator navigator;
+    navigator.setPath(route, requested);
+    for (int tick = 0; tick < 1200 && navigator.isActive(); ++tick) {
+        navigator.update(robot, grid);
+        robot.update(SimConfig::DT);
+    }
+    require(!navigator.isActive() &&
+            hypot(robot.x - requested.x, robot.y - requested.y) <=
+                Navigator::GOAL_TOLERANCE,
+            "Navigator reported arrival at cell center instead of exact goal");
+}
+
+void testPhysicalSafetyWithoutMapping() {
+    World world;
+    Robot robot;
+    robot.x = -17.0; robot.y = -11.5;
+    robot.theta = 1.5707963267948966;
+    robot.leftSpeed = robot.rightSpeed = 1.0;
+    for (int i = 0; i < 180; ++i) {
+        advanceRobotSafely(robot, world, SimConfig::DT);
+        require(!world.collides(robot.x, robot.y, SimConfig::ROBOT_RADIUS),
+                "physical safety depended on mapping or planner");
+    }
+    require(robot.y < -10.4, "emergency stop did not prevent wall contact");
+}
+
 } // namespace
 
 int main() {
@@ -200,6 +237,8 @@ int main() {
         testCornerCuttingAndKnownMap();
         testModeSwitchAndReset();
         testInitialRealScan();
+        testExactRequestedArrival();
+        testPhysicalSafetyWithoutMapping();
         cout << "Planning tests passed\n";
     } catch (const exception& e) {
         cerr << "Planning test failed: " << e.what() << '\n';

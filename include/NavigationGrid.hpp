@@ -3,6 +3,7 @@
 struct GridCell {
     int x;
     int y;
+    bool operator==(const GridCell&) const = default;
 };
 
 struct WorldPoint {

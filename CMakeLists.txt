@@ -90,4 +90,16 @@ if(BUILD_TESTING)
     )
     target_include_directories(goal_exploration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME goal_exploration_tests COMMAND goal_exploration_tests)
+
+    add_executable(simulation_evaluation
+        tests/SimulationEvaluation.cpp
+        src/AStar.cpp src/DiscoveredPlanningGrid.cpp src/FrontierExplorer.cpp
+        src/Lidar.cpp src/Mapping.cpp src/Navigator.cpp src/OccupancyGrid.cpp
+        src/Robot.cpp src/Sensor.cpp src/World.cpp
+    )
+    target_include_directories(simulation_evaluation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME discovered_obstacle_recovery COMMAND simulation_evaluation
+        ${CMAKE_CURRENT_BINARY_DIR}/discovered_obstacle_recovery.csv new_obstacle)
+    add_test(NAME known_obstacle_recovery COMMAND simulation_evaluation
+        ${CMAKE_CURRENT_BINARY_DIR}/known_obstacle_recovery.csv dynamic_crossing)
 endif()

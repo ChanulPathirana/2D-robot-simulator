@@ -1,4 +1,5 @@
 #include "FrontierExplorer.hpp"
+#include "RouteDiagnostics.hpp"
 
 #include "AStar.hpp"
 #include "RouteValidation.hpp"
@@ -81,6 +82,20 @@ FrontierExplorer::FrontierExplorer(
         throw invalid_argument("Invalid frontier exploration settings");
     }
     refreshMapStats();
+    const double step = map.getCellSize() * 0.5;
+    for (int ray = 0; ray < INFORMATION_RAYS; ++ray) {
+        const double angle = 2.0 * numbers::pi * ray / INFORMATION_RAYS;
+        const double dx = cos(angle), dy = sin(angle);
+        for (double distance = step; distance <= lidarRange; distance += step) {
+            const GridCell offset{
+                static_cast<int>(floor(0.5 + dx * distance / map.getCellSize())),
+                static_cast<int>(floor(0.5 + dy * distance / map.getCellSize()))
+            };
+            auto& samples = informationRayOffsets[ray];
+            if (samples.empty() || !sameCell(samples.back(), offset))
+                samples.push_back(offset);
+        }
+    }
 }
 
 vector<FrontierRegion> FrontierExplorer::detectFrontiers(
@@ -196,17 +211,11 @@ vector<double> FrontierExplorer::travelCosts(GridCell start) const {
 }
 
 int FrontierExplorer::estimateInformationGain(GridCell viewpoint) const {
-    const double x0 = grid.gridToWorldX(viewpoint.x);
-    const double y0 = grid.gridToWorldY(viewpoint.y);
-    const double step = map.getCellSize() * 0.5;
     int gain = 0;
-    for (int ray = 0; ray < INFORMATION_RAYS; ++ray) {
-        const double angle = 2.0 * numbers::pi * ray / INFORMATION_RAYS;
-        const double dx = cos(angle);
-        const double dy = sin(angle);
-        for (double distance = step; distance <= lidarRange; distance += step) {
-            const GridCell cell = grid.worldToGrid(x0 + dx * distance,
-                                                   y0 + dy * distance);
+    for (const auto& samples : informationRayOffsets) {
+        for (const GridCell offset : samples) {
+            const GridCell cell{viewpoint.x + offset.x,
+                                viewpoint.y + offset.y};
             if (!inside(map, cell.x, cell.y)) break;
             const CellState state = map.getCell(cell.x, cell.y);
             if (state == CellState::Occupied) break;
@@ -436,10 +445,12 @@ bool FrontierExplorer::tryPlanRequestedGoal(
         grid.isBlocked(target.x, target.y) ||
         grid.isBlocked(start.x, start.y)) return false;
     vector<GridCell> directPath = AStar::findPath(grid, start, target);
-    if (directPath.empty()) return false;
+    if (!validateRoute(grid, directPath)) return false;
     clearRoute(robot, navigator, path);
     path = move(directPath);
     navigator.setPath(path, requestedGoal);
+    logAcceptedRoute("Discovered Map", "GoalDirected", "DiscoveredMapGoal",
+                     requestedGoal, std::nullopt, robot, grid, path);
     currentState = ExplorationState::NavigatingToGoal;
     goalCheckTimer = settings.goalCheckSeconds;
     stallTimer = 0.0;
@@ -550,7 +561,7 @@ void FrontierExplorer::update(
                 break;
             }
             path = AStar::findPath(grid, startCell, *viewpoint);
-            if (path.empty()) {
+            if (!validateRoute(grid, path)) {
                 recordFailure(*viewpoint);
                 enterRecovery(robot, navigator, path, RecoveryCause::MotionFailure);
                 break;
@@ -558,6 +569,13 @@ void FrontierExplorer::update(
             currentGoal = viewpoint;
             observedAtTargetStart = stats.observed;
             navigator.setPath(path);
+            logAcceptedRoute("Discovered Map",
+                             currentTask == ExplorationTaskMode::GoalDirected
+                                 ? "GoalDirected" : "IndependentExploration",
+                             "FrontierViewpoint", requestedGoal,
+                             WorldPoint{grid.gridToWorldX(viewpoint->x),
+                                        grid.gridToWorldY(viewpoint->y)},
+                             robot, grid, path);
             currentState = ExplorationState::Navigating;
             stallTimer = 0.0;
             break;

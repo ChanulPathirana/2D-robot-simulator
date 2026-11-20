@@ -4,6 +4,7 @@
 #include "Navigator.hpp"
 
 #include <optional>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -139,6 +140,7 @@ private:
     GoalFailureReason failureReason = GoalFailureReason::None;
     std::vector<ViewpointRecord> failed;
     std::vector<ViewpointRecord> visited;
+    std::array<std::vector<GridCell>, 24> informationRayOffsets;
     double lastX = 0.0;
     double lastY = 0.0;
     double lastTheta = 0.0;

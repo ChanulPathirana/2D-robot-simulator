@@ -2,6 +2,7 @@
 #include "AStar.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -10,6 +11,17 @@
 using namespace std;
 
 namespace {
+ AStar::Timing timingData;
+ struct TimingScope {
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    ~TimingScope() {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        ++timingData.calls;
+        timingData.totalMs += ms;
+        timingData.maxMs = std::max(timingData.maxMs, ms);
+    }
+ };
 
 double heuristic(GridCell a, GridCell b) {
     // Octile distance for 8-direction movement.
@@ -31,11 +43,15 @@ struct Node {
 
 } // namespace
 
+AStar::Timing AStar::timing() { return timingData; }
+void AStar::resetTiming() { timingData = {}; }
+
 vector<GridCell> AStar::findPath(
     const NavigationGrid& grid,
     GridCell start,
     GridCell goal
 ) {
+    TimingScope timingScope;
     int cols = grid.getCols();
     int rows = grid.getRows();
 
